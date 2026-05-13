@@ -100,3 +100,83 @@ export async function getCompanyById(
 
   return { company, people };
 }
+
+// W5: filtered + sorted "people at company X" query for the /queries
+// surface. Status filter walks `positions.current`; sort options:
+//  - "declared-first" (default): declared positions first, then alphabetical
+//  - "name": pure alphabetical
+//  - "connected": most recently connected (LinkedIn connection date) first
+// Connection-date sort needs a LEFT JOIN to the connections table; null
+// connection dates (the owner) sort last.
+export type AtCompanyStatus = "any" | "current" | "past";
+export type AtCompanySort = "declared-first" | "name" | "connected";
+
+export type AtCompanyRow = {
+  id: string;
+  fullName: string;
+  headline: string | null;
+  title: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  current: boolean;
+  origin: "declared" | "synthesised";
+  connectedAt: string | null;
+};
+
+export async function listAtCompany(
+  companyId: string,
+  status: AtCompanyStatus,
+  sort: AtCompanySort,
+  tenantId: string = LOCAL_TENANT_ID,
+): Promise<AtCompanyRow[]> {
+  // Status WHERE clause is a parameterised sqlite int comparison.
+  const statusSql =
+    status === "current"
+      ? sql`AND po.current = 1`
+      : status === "past"
+        ? sql`AND po.current = 0`
+        : sql``;
+  // Sort ORDER BY — declared-first puts origin='declared' rows on top,
+  // then ties broken alphabetically; name is pure alphabetical;
+  // connected sorts by connection date desc (newest first).
+  const orderSql =
+    sort === "name"
+      ? sql`ORDER BY p.full_name ASC`
+      : sort === "connected"
+        ? sql`ORDER BY (conn.connected_at IS NULL) ASC, conn.connected_at DESC, p.full_name ASC`
+        : sql`ORDER BY CASE po.origin WHEN 'declared' THEN 0 ELSE 1 END, p.full_name ASC`;
+  const rows = await db.all<{
+    id: string;
+    full_name: string;
+    headline: string | null;
+    title: string | null;
+    start_date: string | null;
+    end_date: string | null;
+    current: number;
+    origin: string;
+    connected_at: string | null;
+  }>(sql`
+    SELECT p.id, p.full_name, p.headline,
+           po.title, po.start_date, po.end_date, po.current, po.origin,
+           conn.connected_at
+    FROM positions po
+    INNER JOIN people p ON p.id = po.person_id AND p.tenant_id = po.tenant_id
+    LEFT JOIN connections conn ON conn.tenant_id = po.tenant_id
+      AND conn.to_person_id = p.id
+    WHERE po.tenant_id = ${tenantId}
+      AND po.company_id = ${companyId}
+      ${statusSql}
+    ${orderSql}
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    headline: r.headline,
+    title: r.title,
+    startDate: r.start_date,
+    endDate: r.end_date,
+    current: r.current === 1,
+    origin: r.origin as "declared" | "synthesised",
+    connectedAt: r.connected_at,
+  }));
+}

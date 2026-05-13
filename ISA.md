@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: W4 — synthesised positions + derived edges
-slug: w4-derived-edges
+current_task: W5a — query surface (at-company + bookmarks)
+slug: w5a-at-company-and-bookmarks
 effort: E4
 phase: complete
-progress: 95/95
+progress: 115/115
 mode: ALGORITHM
 started: 2026-05-13
 updated: 2026-05-13
@@ -168,6 +168,28 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-94: Anti: derived edges and manual edges are queried via two separate query functions (`@/lib/queries/manualEdges.ts` and `@/lib/queries/derivedEdges.ts`); the UI sections are visually distinct; `grep -r "manual_edges.*derived_edges"` returns 0 hits in `src/`
 - [x] ISC-95: Anti: derive job NEVER writes an edge with `person_a == person_b` (self-loop guard: i<j loop + `if (acc.personA === acc.personB) continue` belt-and-braces)
 
+**W5a — Query surface: at-company + saved-query bookmarks** *(Stream A only this session; other W5 queries deferred to W5b)*
+- [x] ISC-96: Schema migration `0004_saved_queries.sql` creates `saved_queries (id, tenant_id, name, url, created_at)` with PK on `id`, UNIQUE on `(tenant_id, name)`, FK on `tenant_id`
+- [x] ISC-97: `bun run db:migrate` is a no-op on second invocation after 0004 applies
+- [x] ISC-98: `/queries/at-company` (no company selected) renders a search input + top-20 companies by people count
+- [x] ISC-99: `/queries/at-company?q=pwc` filters the no-company picker by case-insensitive substring on company name (parameterised)
+- [x] ISC-100: `/queries/at-company?company=<id>` renders the people-at-that-company list with the company name in a header
+- [x] ISC-101: `/queries/at-company?company=<id>` for a nonexistent id returns 404 (Next.js notFound), not a server crash
+- [x] ISC-102: `?company=<id>&status=current` filters to positions with `current=true` only
+- [x] ISC-103: `?company=<id>&status=past` filters to positions with `current=false` only
+- [x] ISC-104: `?company=<id>&status=any` (default) shows both, with current rows grouped first
+- [x] ISC-105: `?company=<id>&sort=name` sorts result rows alphabetically by full_name
+- [x] ISC-106: `?company=<id>&sort=connected` sorts result rows by `connections.connected_at` desc (most recently connected first)
+- [x] ISC-107: `?company=<id>&sort=declared-first` (default) puts declared positions before synthesised, then alphabetical
+- [x] ISC-108: `?company=<id>` for PwC España renders ≥20 people on the real export
+- [x] ISC-109: `POST /api/bookmarks` accepts `{ name, url }`, returns `201 { id, name, url, created_at }`
+- [x] ISC-110: `POST /api/bookmarks` with empty/whitespace `name` returns `400`
+- [x] ISC-111: `POST /api/bookmarks` with a name that already exists for the tenant returns `409 { reason: "duplicate_name" }`
+- [x] ISC-112: `DELETE /api/bookmarks/<id>` returns `204` on success, `404` if no such id
+- [x] ISC-113: `/queries/at-company` renders a "Bookmark this query" affordance that POSTs the current URL with a prompted name
+- [x] ISC-114: `/queries/at-company` renders a "Saved queries" sidebar/section listing bookmarks for the tenant; each is a link to its URL with a delete button
+- [x] ISC-115: Anti: SQL injection probe — `?q=' OR 1=1 --` returns 200; offsite URL POST (`https://evil.com/x` or `//evil.com/x`) → 400 *(Anti: local-first — bookmarks must point at in-app paths only. Added post-Advisor review.)*
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -204,6 +226,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | ISC-92..93 | ui | playwright at /people/[id] + /companies/[id] | derived section visible, sorted, labelled | playwright firefox |
 | ISC-94 | grep | combined edges anti-pattern check | 0 hits | grep -r |
 | ISC-95 | unit | self-loop edge case | derive emits zero (a,a) edges | bun test |
+| ISC-96..97 | migration | drizzle migrate + sqlite_master probe | saved_queries present, UNIQUE enforced, second run no-op | sqlite3 |
+| ISC-98..108 | ui | playwright at /queries/at-company across param combos | expected selectors + counts | playwright firefox |
+| ISC-109..112 | http | curl POST/DELETE /api/bookmarks | status + JSON shape | curl -i |
+| ISC-113..114 | ui | playwright at /queries/at-company | bookmark affordance + listing visible after POST | playwright firefox |
+| ISC-115 | http+ui | bad-input probes | 200/404, no crash | curl + playwright |
 
 ## Features
 
@@ -224,6 +251,10 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | derive-edges-job *(W4)* | ISC-76..87, ISC-95 | synthesised-positions | no |
 | derive-trigger-api-cli *(W4)* | ISC-88..91 | derive-edges-job | yes |
 | derived-edges-ui *(W4)* | ISC-92..94 | derive-trigger-api-cli | yes |
+| schema-migration-0004 *(W5a)* | ISC-96..97 | — | no (first in W5) |
+| at-company-page *(W5a)* | ISC-98..108 | schema-migration-0004 | yes (with bookmarks-api) |
+| bookmarks-api *(W5a)* | ISC-109..112 | schema-migration-0004 | yes |
+| bookmarks-ui *(W5a)* | ISC-113..115 | bookmarks-api, at-company-page | no |
 
 ## Decisions
 
@@ -245,6 +276,10 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 
 - 2026-05-13 (W4 refined): **bothCurrent override on confidence buckets.** First derive run produced 15709 edges, 100% of kind `shared_employer_no_overlap` — wrong. The synthesised-position null-as-today rule collapses every synthesised pair to a 0-month overlap window, so the original bucket spec ("months >= 1 → overlap, else no-overlap") under-reported reality. Fix: when bothCurrent is true AND months is 0, emit `shared_employer_overlap` with confidence 0.9 / 0.7 / 0.5 depending on declared-vs-synthesised mix. Honest about what we actually know: LinkedIn declares both there today; we just don't know duration. Post-fix: 15697 overlap (160 at 0.7 — owner-currently-at-company pairs; 15537 at 0.5 — connection-pair both-current), 12 at 0.4 (Matt's past employers vs current connections). Captured as ISC-85.1.
 - 2026-05-13 (W4 refined): **Derive insert path batched.** First run was 378s for 15709 inserts — one serial await each. Refactored to a 100-row chunked `db.insert().values([...])` batch. New runtime: 17.8s (21× speedup). libSQL parameter cap is 999; 100 rows × 7 cols = 700 params, safe margin.
+- 2026-05-13 (W5a): **Query URL uses `?company=ID` not `[id]` segment.** Originally scoped as `/queries/at-company/[id]` but flipped to a query param so the entire query state (company + status + sort) sits in the URL search-string and a saved bookmark is just `the URL`. With `[id]`, the URL would have to be reconstructed from path + query, and switching companies would require a navigation rather than a form submit.
+- 2026-05-13 (W5a): **Bookmark UNIQUE is on `(tenant_id, name)` not URL.** Two bookmarks with the same URL but different names is a legitimate UX: "Current PwC España colleagues" and "PwC España network" point at the same query but cluster the same dataset under different labels. Two bookmarks with the same NAME is the actual confusion to prevent.
+- 2026-05-13 (W5a): **Bookmark URL validated as in-app relative path.** Local-first means a bookmark must point inside the app. Without validation, a POST of `{ name: "x", url: "https://evil.com/y" }` would create a sidebar link to an offsite URL — the app would render it as a normal anchor and the click would leave localhost. Validation rejects anything not starting with `/`, and also rejects protocol-relative `//evil.com` (which would be parsed as offsite by the browser). Added post-Advisor review.
+- 2026-05-13 (W5a): **Other three W5 queries deferred to W5b.** User scope choice at OBSERVE: build only the at-company surface this session. `worked-with`, `by-year`, and `reach` are next-session work. Reach-rank algorithm pre-decided: confidence × 1-hop-count (manual edges at 1.0 always rank above derived; same-bucket derived ties broken by overlap_months desc).
 
 ## Changelog
 
@@ -293,3 +328,9 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-94: `grep -rn "manual_edges.*derived_edges\|manual_edges.*join.*derived_edges\|manual_edges.*union.*derived_edges" src/` → 0 hits. Two distinct query modules (`manualEdges.ts`, `derivedEdges.ts`); two distinct UI sections on `/people/[id]` with separate `data-testid` markers.
 - W4 verify suite: `bun run scripts/verify-w4.ts` → 12/12 checks pass. W3 regression: `bun run scripts/verify-w3.ts` → 23/23 still pass.
 - Cato (E4 cross-vendor audit): `skipped` — `codex` CLI not installed on this WSL host. Show-my-math: Advisor was invoked and produced a substantive critique that drove the three-kind taxonomy refactor (advisor flagged the original 2-kind labelling as laundering weak signal into the strong-signal bucket). Action item logged: install codex CLI in WSL before next E4/E5 work in this project, or run E4/E5 work from a host where codex is available.
+- ISC-96..97 (W5): `bun run db:migrate` applies `0004_saved_queries.sql`; PRAGMA table_info shows the 5 columns; PRAGMA index_list shows `saved_queries_name_unique` (UNIQUE) + `saved_queries_tenant_idx`; second migrate run no-op.
+- ISC-98..108 (W5): `bun run scripts/verify-w5.ts` — picker shows 20 companies at no-company state; `?q=pwc` filters; nonexistent company → 404; PwC España selected → heading correct, 145 rows; `status=current` shows 145 with `Current` badge; `status=past` empty; `sort=connected` and `sort=name` both render with the active filter chip marked.
+- ISC-109..112 (W5): live curl against `bun dev` — POST `/api/bookmarks` returns 201 with id; duplicate name → 409; whitespace name → 400; DELETE existing → 204; DELETE again → 404; offsite URL `https://evil.com/x` and protocol-relative `//evil.com/x` both → 400 (anti: local-first).
+- ISC-113..114 (W5): Playwright probe — `[data-testid="save-bookmark"]` present on selected-company page; after POST, `[data-testid="saved-query-row"]` reflects the new bookmark.
+- ISC-115 (W5): SQL injection probe on `?q=' OR 1=1 --` returns 200; offsite + protocol-relative URL POSTs both 400 per local-first anti-criterion.
+- W5 verify suite: `bun run scripts/verify-w5.ts` → 29/29 pass. Regressions: `verify-w3.ts` 23/23, `verify-w4.ts` 12/12 still green. Unit tests: 18/18.

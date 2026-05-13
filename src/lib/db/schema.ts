@@ -185,6 +185,27 @@ export const manualEdges = sqliteTable(
   }),
 );
 
+// W5: a saved query is just a friendly name + the URL that produces it
+// (with all params encoded). Bookmarks survive across machines via the .db
+// file and across `bun dev` restarts. UNIQUE on (tenant_id, name) so the
+// owner doesn't accumulate confused duplicates.
+export const savedQueries = sqliteTable(
+  "saved_queries",
+  {
+    id: text("id").primaryKey(),
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => tenants.id),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => ({
+    nameUnique: unique("saved_queries_name_unique").on(t.tenantId, t.name),
+    tenantIdx: index("saved_queries_tenant_idx").on(t.tenantId),
+  }),
+);
+
 // Derived edges power "who knows who" within your network. LinkedIn does not
 // expose the 2nd-degree graph; everything in this table is inferred from
 // shared employment + overlapping dates. Idempotent on (person_a, person_b, kind).
