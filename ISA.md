@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: W5b — worked-with + by-year + reach queries
-slug: w5b-remaining-queries
+current_task: W6 — Cytoscape force-directed graph view
+slug: w6-graph-view
 effort: E4
 phase: complete
-progress: 145/145
+progress: 165/165
 mode: ALGORITHM
 started: 2026-05-13
 updated: 2026-05-13
@@ -230,6 +230,28 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-144: All three pages render with 0 page errors and 0 console errors during Playwright probe
 - [x] ISC-145: All three query URLs round-trip through POST /api/bookmarks → DELETE — the bookmark plumbing built in W5a accepts the new URL shapes without modification
 
+**W6 — Cytoscape force-directed graph view**
+- [x] ISC-146: `src/lib/queries/graph.ts` exports `assembleNetworkGraph(tenantId, opts)` returning `{ nodes, edges, meta }`
+- [x] ISC-147: Node selection: always include owner + every person with ≥1 manual edge incident OR ≥1 derived edge with confidence ≥ 0.7 incident; cap at 150 total nodes (drop lowest-confidence nodes if over cap)
+- [x] ISC-148: Edge selection: include all manual_edges where both endpoints are in the node set; include derived_edges with confidence ≥ 0.7 where both endpoints are in the node set
+- [x] ISC-149: Each node carries `id`, `displayName`, `company` (current employer if any, else null), `isOwner` flag, `degree` (count of incident edges in the rendered set)
+- [x] ISC-150: Each edge carries `id`, `source`, `target`, `kind` ('manual' | 'derived_overlap' | 'derived_currently' | 'derived_no_overlap'), `confidence`, optional `companyName`, `overlapMonths`, `note`
+- [x] ISC-151: `/graph` page server-loads `assembleNetworkGraph` and passes data to the `NetworkGraph` client component
+- [x] ISC-152: `NetworkGraph` is a `"use client"` component that instantiates Cytoscape with the cose layout and renders inside a fixed-height container
+- [x] ISC-153: Owner node renders with a distinct visual (larger, distinct color)
+- [x] ISC-154: Manual edges render solid; derived edges render dashed
+- [x] ISC-155: Nodes coloured by company-cluster — each unique `company` gets a stable colour derived from a hash of the company name
+- [x] ISC-156: `/graph` page renders ≥100 visible nodes on the real export
+- [x] ISC-157: `/graph` renders without any non-localhost network requests (Cytoscape loaded from local bundle)
+- [x] ISC-158: Anti: `/graph` page initial-render time (server-rendered HTML payload) is under 200KB
+- [x] ISC-159: Anti: page renders with 0 page errors and 0 console errors during a Playwright probe
+- [x] ISC-160: `/graph` exposes a `data-testid="graph-container"` element with the Cytoscape canvas inside
+- [x] ISC-161: Page shows a meta panel with the node count and edge count rendered
+- [x] ISC-162: For an empty tenant (no edges meeting the threshold), `/graph` renders an explicit empty state (not a blank canvas)
+- [x] ISC-163: Bookmark this query (`/graph`) round-trips through `/api/bookmarks` POST 201 → DELETE 204 without modification (smoke check the existing API accepts this URL shape)
+- [x] ISC-164: `/graph` page is added to the home-page roadmap as a live link (replace the placeholder W6 entry in the routes array)
+- [x] ISC-165: Anti: the home-page roadmap's "Derived edges" stale entry that pointed at `/graph` is removed (derived edges live on /people/[id] and /companies/[id], not on a dedicated page)
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -333,7 +355,17 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-13 (W5b): **`directConnection` is data-driven, not schema-invariant-driven.** For v1, every non-owner in `people` is in `connections` (Connections.csv populates both). That means `directConnection` is tautologically true for any valid target X. Implementation still queries the `connections` table explicitly so the day a person enters via a derived-only path (future scrape, manual seed, multi-tenant friend's data), the panel hides itself. Documented intent: "non-owner without direct edge → page shows reach-only state."
 - 2026-05-13 (W5b): **by-year bucketing is safe by ingest invariant, not by runtime parsing.** `substr(connected_at, 1, 4)` assumes ISO `YYYY-MM-DD`. The LinkedIn parser `parseConnectionDate` enforces this format and returns null on any failed parse (`/^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/`); null lands as NULL in DB and falls into the 'unknown' bucket via the `connected_at IS NULL` branch. No runtime guard added: the ingest pipeline is the single ingestion point for `connected_at`, and the parser is unit-tested. If future ingestion routes (manual edit, external API) emit non-ISO dates, that's an ingest bug to fix at the new ingestion point, not a downstream guard.
 
+- 2026-05-13 (W6): **Graph v1 is intentionally a star — not a bug, a v1 data property.** `HIGH_CONFIDENCE_FLOOR = 0.7` for both node entry AND edge rendering. In the real dataset every 0.5-confidence edge is connection-to-connection within the same current employer (the `shared_employer_currently` bothCurrent override path) — there are zero connection-to-connection 0.7+ edges because no two connections both have *declared* positions at the same company (only owner has declared positions). So the 150-node rendered graph is owner + 149 strong-incident colleagues with 149 owner↔colleague edges (N−1, a star).  Densifying with the 0.5 edges between the same nodes would emit ~9k edges, push the HTML payload to 3.1MB, and stretch the cose layout past the 10s budget — verified by running the densified version. Future work: a "show within-cluster mid-confidence" toggle with an explicit edge cap (e.g., top-300 by confidence) and a "this may be slow" warning before activation.
+- 2026-05-13 (W6): **Cytoscape goes through `next/dynamic` with ssr:false, not `"use client"` alone.** `cytoscape()` touches `document` synchronously at instantiation. A bare `"use client"` component still runs on the server during SSR/streaming, then hydrates — the server pass would error on the missing document. `next/dynamic(() => import(...), { ssr: false })` defers the import + render to the client entirely. The server emits the `<GraphSkeleton />` shell; the client hydrates and runs Cytoscape against real DOM.
+- 2026-05-13 (W6): **Owner colour reserved via shape/size, not hue band.** Advisor flagged a possible collision between owner red (~hue 0°) and company hashes that land near 0°. Mitigation chosen: owner gets distinct *shape* (no border-radius circle vs. small circle) and *size* (26px vs 16px) plus a thick outline, not a hue-band reservation. Easier to read at low DPI; survives any colour-blind palette swap; and the owner node is also positioned at the gravitational centre by cose so it's already visually obvious.
+
 ## Changelog
+
+- 2026-05-13 (W6) — **Densifying a force-directed graph "for visual interest" cost 30× the HTML payload**
+  - **Conjectured:** Lowering the edge-render floor from 0.7 to 0.5 would add visual cluster structure without materially affecting load time or payload, because the within-cluster 0.5 edges live among already-rendered nodes (no node expansion needed).
+  - **Refuted by:** Empirical run after the change: HTML payload went 84.9KB → 3.176MB (37× increase), cose layout time crossed the 10s budget (9.5s → 11.4s), and the visual result was a hairball rather than legible clusters. The same-employer-currently overlay added 9,016 edges on top of the original 149 — every PwC España pair, every OBS pair, etc.
+  - **Learned:** "Add some structure" requires bounding the addition, not just lowering the floor. A confidence floor + node cap is enough for the node count; for edges you also need an edge cap or a per-cluster cap. The right v1 answer for this data is to accept the star and document why — every 0.5 edge in the dataset is a same-employer-now-no-dates pair, and rendering all of them is honest but unreadable.
+  - **Criterion now:** ISC-148 keeps both floors at 0.7 with the rationale embedded in the EDGE_FLOOR constant comment. A future ISC for "densify with an explicit edge cap" tracks the follow-up work without making the v1 commit ship the hairball.
 
 - 2026-05-13 (W5b) — **Option labels vs option descriptions drift**
   - **Conjectured:** When an AskUserQuestion option is labelled `"Confidence × 1‑hop‑count"`, the multiplicative form is the contract, regardless of the option's prose description.
@@ -399,3 +431,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-145 (W5b bookmark round-trip): POST /api/bookmarks → DELETE round-trip succeeded on all 3 new URL shapes (`worked-with/[id]`, `by-year?year=YYYY`, `reach/[id]`) — bookmark plumbing handles them unmodified.
 - W5b verify suite: `bun run scripts/verify-w5b.ts` → 33/33 pass. Full regression: `verify-w3.ts` 23/23, `verify-w4.ts` 12/12, `verify-w5.ts` 29/29, `bun test` 18/18 all still green.
 - Cato (E4 cross-vendor audit, W5b): `skipped` — codex CLI still not installed on WSL host (same gap as W4/W5a). Advisor invoked and produced a substantive critique (scoring-formula label drift; data-driven vs invariant-driven directConnection; substr fragility) — all three are documented in W5b Decisions; nothing required code changes.
+- ISC-146..150 (W6): `assembleNetworkGraph` returns `{ nodes, edges, meta }` for tenant=local — on real data: 150 nodes (owner + top-149 by edge strength, cap honoured), 149 edges (manual + derived ≥0.7 between retained nodes). Each node carries `id`, `displayName`, `company` (current employer string), `isOwner`, `degree`. Each edge carries `id`, `source`, `target`, `kind` (manual | derived_overlap | derived_currently | derived_no_overlap), `confidence`, optional `companyName`, `overlapMonths`, `note`.
+- ISC-151..156 (W6): `/graph` → 200 with the NetworkGraph client-mounted Cytoscape canvas inside `[data-testid="graph-container"]`; cose layout converges in ~9.5s for 150 nodes; owner rendered red (`#dc2626`) and larger (26px vs 16px); manual edges solid orange (`#d97706`), derived_overlap dashed deep blue, derived_currently dashed lighter blue, derived_no_overlap dotted gray; non-owner nodes coloured by `djb2(company) % 360` hue for stable per-company cluster colour; ≥100 nodes verified at 150.
+- ISC-157..159 (W6 anti): 0 non-localhost requests during graph load (Cytoscape bundled from `node_modules/cytoscape`); 0 page errors and 0 console errors during Playwright probe; initial HTML payload 84.9KB (well under 200KB cap).
+- ISC-160..162 (W6 ui): `data-testid="graph-container"` element renders 3 inner Cytoscape canvases (layers, edges, nodes); meta panel exposes "150 nodes · 149 edges (capped at 150; confidence ≥ 0.7; N candidates seen)" via `data-testid="graph-meta"`; empty-tenant case renders the `data-testid="graph-empty"` panel instead of an empty canvas.
+- ISC-163 (W6 bookmark): POST `/api/bookmarks { name, url:"/graph" }` → 201 with id; DELETE → 204. No bookmark-plumbing changes required for the new URL shape.
+- ISC-164..165 (W6 roadmap): home page route list updated to surface all 4 query pages + `/graph` as live links; the stale `Derived edges → /graph` entry removed.
+- W6 verify suite: `bun run scripts/verify-w6.ts` → 11/11 pass. Full regression: `verify-w3.ts` 23/23, `verify-w4.ts` 12/12, `verify-w5.ts` 29/29, `verify-w5b.ts` 33/33, `bun test` 18/18 all still green.
+- Cato (E4 cross-vendor audit, W6): `skipped` — codex CLI still not installed on WSL host. Advisor invoked and surfaced the "is this a star?" structural question; investigation confirmed the star is intentional in the v1 dataset (all 0.5-confidence edges are connection-to-connection within-employer pairs that would emit ~9k edges if densified). Documented in W6 Decisions with a follow-up flag for an explicit "show within-cluster mid-confidence" toggle in a future session.

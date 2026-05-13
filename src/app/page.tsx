@@ -14,9 +14,11 @@ const routes: Array<{
   { name: "Profile", path: "/profile", status: "live", badge: "Live", description: "Your own owner identity from Profile.csv" },
   { name: "People", path: "/people", status: "live", badge: "Live", description: "Browse and filter your connections" },
   { name: "Companies", path: "/companies", status: "live", badge: "Live", description: "Everyone in your network who has worked at X" },
-  { name: "Derived edges", path: "/graph", status: "next", badge: "W4", description: "Shared employer + overlap inference — who knows who within your network" },
-  { name: "Queries", path: "/queries", status: "later", badge: "W5", description: "Who do I know at X · who's worked with whom · closest path" },
-  { name: "Graph", path: "/graph", status: "later", badge: "W6", description: "Force-directed Cytoscape view of your network" },
+  { name: "Queries · at company", path: "/queries/at-company", status: "live", badge: "Live", description: "Who do I know at X — with status / sort filters and saved bookmarks" },
+  { name: "Queries · worked with", path: "/queries/worked-with", status: "live", badge: "Live", description: "Manual + derived edges incident to one person, kept honest about provenance" },
+  { name: "Queries · by year", path: "/queries/by-year", status: "live", badge: "Live", description: "Connections-by-year histogram and per-year drilldown" },
+  { name: "Queries · reach", path: "/queries/reach", status: "live", badge: "Live", description: "Strongest intermediaries from you to a target person" },
+  { name: "Graph", path: "/graph", status: "live", badge: "Live", description: "Force-directed Cytoscape view of your network, clustered by company" },
 ];
 
 export default function HomePage() {
