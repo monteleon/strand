@@ -91,12 +91,14 @@ export async function getPersonById(
       startDate: schema.positions.startDate,
       endDate: schema.positions.endDate,
       current: schema.positions.current,
+      origin: schema.positions.origin,
       companyId: schema.positions.companyId,
       companyName: schema.companies.name,
     })
     .from(schema.positions)
     .leftJoin(schema.companies, eq(schema.companies.id, schema.positions.companyId))
-    .where(eq(schema.positions.personId, id));
+    .where(eq(schema.positions.personId, id))
+    .orderBy(sql`CASE ${schema.positions.origin} WHEN 'declared' THEN 0 ELSE 1 END`);
 
   const [connection] = await db
     .select({ connectedAt: schema.connections.connectedAt })

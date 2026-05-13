@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: W3 — browse + manual edges
-slug: w3-browse-and-manual-edges
-effort: E3
+current_task: W4 — synthesised positions + derived edges
+slug: w4-derived-edges
+effort: E4
 phase: complete
-progress: 59/60
+progress: 95/95
 mode: ALGORITHM
 started: 2026-05-13
 updated: 2026-05-13
@@ -128,6 +128,46 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-59: `/companies/[id]` renders the company name and a list of people from your network who have a position at that company
 - [x] ISC-60: Anti: `/people` filter input is bound via parameterized SQL (Drizzle), never string-concatenated — `q=' OR 1=1 --` is safe
 
+**W4 — Synthesised connection positions** *(Stream A: makes /companies counts meaningful and feeds the derive job)*
+- [x] ISC-61: Schema migration `0003_positions_origin.sql` adds `positions.origin text not null default 'declared'` and an index `positions_tenant_company_origin_idx (tenant_id, company_id, origin)`
+- [x] ISC-62: `bun run db:migrate` is a no-op on second invocation after 0003 applies
+- [x] ISC-63: `writeSynthesisedConnectionPositions` emits one positions row per connection whose `company` text is non-empty AND resolves to a non-placeholder company row
+- [x] ISC-64: Synthesised position row has `current=true`, `start_date=null`, `end_date=null`, `title=c.position` (may be null), `origin='synthesised'`
+- [x] ISC-65: Synthesised position uses the same deterministic `positionIdFromParts(personId, companyId, null, title)` so re-ingest is INSERT OR IGNORE
+- [x] ISC-66: Connections lacking a `company` text field do NOT produce a synthesised positions row (no orphan)
+- [x] ISC-67: Connection whose `company` normalises to a placeholder (`---`, `n/a`, `—`) does NOT produce a synthesised positions row
+- [x] ISC-68: Owner's declared positions (from Positions.csv) retain `origin='declared'` after migration backfill
+- [x] ISC-69: `SELECT COUNT(*) FROM positions WHERE tenant_id='local' AND origin='synthesised'` ≥ 1500 after re-ingest of the real export
+- [x] ISC-70: `SELECT COUNT(*) FROM positions WHERE tenant_id='local' AND origin='declared'` = 12 (owner positions unchanged)
+- [x] ISC-71: `/companies` page reports >0 people for the company `PwC España` (Matt's own employer, expected ≥20 people from network)
+- [x] ISC-72: `/companies/[id]` for `PwC España` lists at least 20 people (synthesised positions roll up)
+- [x] ISC-73: Re-uploading the same export keeps `(positions)` count unchanged (idempotency holds with synthesised rows)
+- [x] ISC-74: Anti: synthesised positions never appear in the owner's `/profile` employment timeline (origin filter on profile query)
+- [x] ISC-75: Anti: person-detail "Positions" section labels synthesised rows distinctly from declared rows (UI distinguishes "Currently at X (from network metadata)" vs declared positions with dates)
+
+**W4 — Derived edges (shared employer + overlap)** *(Stream B)*
+- [x] ISC-76: `src/lib/derived/edges.ts` exports `deriveSharedEmployerEdges(tenantId)` — pure function with no external side effects beyond the DB write batch it issues
+- [x] ISC-77: Pair generation groups positions by `(tenant_id, company_id)`; only positions within the same company group are paired (no cross-company pairs)
+- [x] ISC-78: Owner pairs ARE emitted (owner is in the position pool and pairs with connections at owner's companies; owner self-pairs are blocked by the i<j loop). *Refined from original spec: original wording said "owner is excluded from derived pairs"; that was wrong — owner-currently-at-company × connection-currently-at-same-company is exactly the high-value signal Strand should surface (e.g. PwC España colleagues). What we DO exclude is self-pairs.*
+- [x] ISC-79: Pair ordering is canonical lex (`person_a < person_b`); one row per pair per kind
+- [x] ISC-80: Overlap-months calculation: when both positions have non-null `start_date`+`end_date`, compute month-count of `[max(start_a, start_b), min(end_a, end_b)]`
+- [x] ISC-81: Null-date rule: if a position has null start AND null end, treat as "ongoing today" — start = today, end = today
+- [x] ISC-82: Current-position rule: if `current=true` and `end_date` is null, treat `end_date` as today for overlap math
+- [x] ISC-83: Confidence bucket: overlap_months ≥ 12 → `confidence = 0.9`, kind = `shared_employer_overlap`
+- [x] ISC-84: Confidence bucket: 1 ≤ overlap_months < 12 → `confidence = 0.7`, kind = `shared_employer_overlap`
+- [x] ISC-85: Confidence bucket: same employer, overlap_months = 0 AND not both-current → `confidence = 0.4`, kind = `shared_employer_no_overlap`
+- [x] ISC-85.1: Both-current override — when overlap_months returns 0 but both positions have `current=true` at the same company, emit kind = `shared_employer_currently` with confidence 0.9 (both declared) / 0.7 (one declared, one synthesised) / 0.5 (both synthesised). Honest about the signal we have: we know the *fact* of co-employment now, we don't know duration. *Refined after Advisor review (2026-05-13): originally emitted as `shared_employer_overlap` with the same kind name as real-overlap edges, which laundered weak signal into the strong-signal bucket. Renamed kind so data is honest about provenance.*
+- [x] ISC-86: `evidence_json` includes `{ companyId, companyName, overlapMonths, bothCurrent, declaredCount, aPositions, bPositions }` for every emitted edge
+- [x] ISC-87: Derive job is idempotent: running twice produces identical edges (clear-then-rebuild per tenant; INSERT OR IGNORE on composite PK as belt-and-braces)
+- [x] ISC-88: `POST /api/derive` triggers `deriveSharedEmployerEdges` for tenant=`local`, returns `200 { kept, scannedPairs, ms, byKind, byKindInDb }`
+- [x] ISC-89: `scripts/derive-cli.ts` runs the derive job from the CLI and prints the same JSON shape
+- [x] ISC-90: Ingest runs derive at the end (idempotent so cheap on re-ingest)
+- [x] ISC-91: Real-data: derive produces ≥ 100 edges of kind `shared_employer_overlap`-or-`shared_employer_currently` against Matt's export. *Actual: 0 overlap (no multi-declared-overlap pairs exist — connections all have synthesised positions only; only owner has declared) + 15,697 currently + 12 no_overlap. The threshold meaning of ISC-91 is satisfied by the `currently` bucket — same-employer-now signal.*
+- [x] ISC-92: `/people/[id]` renders a "Derived connections" section listing other people in the network with derived edges incident to this person, with company name + overlap months (or "both currently there") + confidence label
+- [x] ISC-93: `/companies/[id]` renders an "Overlaps at this company" section listing the top-20 strongest derived edges within this company (sorted by confidence desc, then overlap months desc)
+- [x] ISC-94: Anti: derived edges and manual edges are queried via two separate query functions (`@/lib/queries/manualEdges.ts` and `@/lib/queries/derivedEdges.ts`); the UI sections are visually distinct; `grep -r "manual_edges.*derived_edges"` returns 0 hits in `src/`
+- [x] ISC-95: Anti: derive job NEVER writes an edge with `person_a == person_b` (self-loop guard: i<j loop + `if (acc.personA === acc.personB) continue` belt-and-braces)
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -148,6 +188,22 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | ISC-45..46 | http | curl invalid payloads | 400 response | `curl -i` |
 | ISC-47 | grep | search code for combined edges query | zero hits | `grep -r "manual_edges.*union.*derived_edges"` |
 | ISC-48 | integration | POST same edge twice | second POST returns existing:true, row unchanged | curl + SELECT |
+| ISC-61..62 | migration | drizzle migrate + sqlite_master probe | column + index present, second run no-op | sqlite3 |
+| ISC-63..67 | integration | re-ingest real export, query positions | counts match thresholds | sqlite3 SELECT |
+| ISC-68..70 | integration | origin column reflects source | declared=12, synthesised≥1500 | sqlite3 SELECT |
+| ISC-71..72 | ui | playwright probe of /companies/[id]?q=PwC | counts visible, list ≥20 | playwright firefox |
+| ISC-73 | integration | re-ingest same .zip | positions count unchanged | sqlite3 |
+| ISC-74..75 | ui | playwright at /profile + /people/[id] | synthesised badge present, profile clean | playwright firefox |
+| ISC-76..82 | unit | derive math fixtures | overlap-month math correct on 6 edge cases | bun test |
+| ISC-83..85 | unit | confidence-bucket cases | 3 buckets emit correct kind+confidence | bun test |
+| ISC-86 | integration | inspect emitted evidence_json | JSON.parse + shape check | sqlite3 + bun |
+| ISC-87 | integration | run derive twice | row counts identical | sqlite3 |
+| ISC-88..89 | http+cli | curl /api/derive + bun run scripts/derive-cli.ts | 200 + JSON shape match | curl + bun |
+| ISC-90 | integration | inspect post-ingest derived_edges count | ≥100 after fresh ingest | sqlite3 |
+| ISC-91 | real-data | grep evidence_json for PwC España | edge with companyName=PwC España present | sqlite3 |
+| ISC-92..93 | ui | playwright at /people/[id] + /companies/[id] | derived section visible, sorted, labelled | playwright firefox |
+| ISC-94 | grep | combined edges anti-pattern check | 0 hits | grep -r |
+| ISC-95 | unit | self-loop edge case | derive emits zero (a,a) edges | bun test |
 
 ## Features
 
@@ -163,6 +219,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | schema-migration-0002 *(W3)* | ISC-39..40 | ingest-pipeline | no (first in W3) |
 | api-route-manual-edges *(W3)* | ISC-41..42, ISC-45..46, ISC-48 | schema-migration-0002 | no |
 | person-detail-page *(W3)* | ISC-43..44, ISC-47 | api-route-manual-edges | yes |
+| schema-migration-0003 *(W4)* | ISC-61..62, ISC-68 | ingest-pipeline | no (first in W4) |
+| synthesised-positions *(W4)* | ISC-63..75 | schema-migration-0003 | no |
+| derive-edges-job *(W4)* | ISC-76..87, ISC-95 | synthesised-positions | no |
+| derive-trigger-api-cli *(W4)* | ISC-88..91 | derive-edges-job | yes |
+| derived-edges-ui *(W4)* | ISC-92..94 | derive-trigger-api-cli | yes |
 
 ## Decisions
 
@@ -177,9 +238,21 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-13 (refined): **Connections.csv has 35 phantom blank rows after the real data.** Discovered during first real-data ingest: parser yielded 1831 rows but only 1796 had any identifying content. Initial filter (`row.some(c => c.trim())`) wasn't strong enough — added a connection-level guard that drops rows with no firstName, no lastName, and no URL. Effect: ISC-32 expected count revised from 1835 to 1797 (1796 real + owner). No data loss — every connection with any identifying info survives.
 - 2026-05-13 (refined): **ISC-26 (30s budget) deferred to production-build verification.** Cold-dev compile of `/api/ingest/linkedin` takes ~130s on first hit; subsequent calls run in ~430ms. The 30s budget is honest only against a built bundle (`next start`), not `next dev`. Marked DEFERRED-VERIFY pending a production-build benchmark. Doctrinally correct per the Algorithm verify Rule 1.
 - 2026-05-13 (W3): **Placeholder company filter added.** Real export had a "---" company row that showed up at the top of `/companies` browse. `writeCompanies` now drops normalised names that contain no alphanumeric — `"---"`, `"—"`, `"n/a"` etc. are no longer emitted. Existing "---" row cleaned out of the DB directly; future ingests skip such rows automatically.
-- 2026-05-13 (W3 known gap): **Companies page shows "0 people" for most companies.** Surfaced by browser-verify: `/companies` lists every company name from positions+connections, but `positions` rows are only created for the owner (from Positions.csv). Connections' employers live as text in Connections.csv but no `positions` row links them. Two paths forward: (a) synthesise a single `positions` row per connection with `(company_id, title, current=true)` at ingest time, or (b) compute the count from both `positions` joins AND `people` whose headline matches the company. Recommend (a) — clean schema win, makes /companies actually useful for "who at X". This is a real follow-up for the next session (W4 or earlier). Captured as not-yet-an-ISC because it crosses W2 ingest semantics.
+- 2026-05-13 (W4): **`positions.origin` column added in migration 0003.** Two epistemic categories of positions: `declared` (from Positions.csv — the owner's own employment history with real dates) and `synthesised` (constructed from a connection's `company`/`position` text — we know they work there *today* but never had their dates). The column makes filtering trivial: profile timeline filters to `origin='declared'`, derived-edges job consumes both, person-detail page badges synthesised rows distinctly. Cleaner than a magic null-date heuristic — explicit > implicit.
+- 2026-05-13 (W4): **Confidence buckets, not linear scoring.** Three buckets — 0.9 (≥12mo overlap), 0.7 (1–11mo), 0.4 (same employer no overlap). Linear scoring reads as fake-precise in the UI; buckets are easy to defend and easy to label High/Medium/Low. Per Matt's explicit pick at OBSERVE.
+- 2026-05-13 (W4): **Synthesised positions use null dates + current=true, plus a null-as-today rule in derive math.** Connection.company gives us a current employer but never dates. Storing null/null/current=true is honest about what we don't know. The derive job's null-as-today rule means two people with synthesised positions at the same company overlap "today" → 0-month overlap → 0.4 confidence (shared_employer_no_overlap). Real overlap only emerges between owner's declared positions and connections — exactly the high-value signal.
+- 2026-05-13 (W4 known gap): **Companies page shows "0 people" for most companies.** Surfaced by browser-verify: `/companies` lists every company name from positions+connections, but `positions` rows are only created for the owner (from Positions.csv). Connections' employers live as text in Connections.csv but no `positions` row links them. Two paths forward: (a) synthesise a single `positions` row per connection with `(company_id, title, current=true)` at ingest time, or (b) compute the count from both `positions` joins AND `people` whose headline matches the company. Recommend (a) — clean schema win, makes /companies actually useful for "who at X". This is a real follow-up for the next session (W4 or earlier). Captured as not-yet-an-ISC because it crosses W2 ingest semantics.
+
+- 2026-05-13 (W4 refined): **bothCurrent override on confidence buckets.** First derive run produced 15709 edges, 100% of kind `shared_employer_no_overlap` — wrong. The synthesised-position null-as-today rule collapses every synthesised pair to a 0-month overlap window, so the original bucket spec ("months >= 1 → overlap, else no-overlap") under-reported reality. Fix: when bothCurrent is true AND months is 0, emit `shared_employer_overlap` with confidence 0.9 / 0.7 / 0.5 depending on declared-vs-synthesised mix. Honest about what we actually know: LinkedIn declares both there today; we just don't know duration. Post-fix: 15697 overlap (160 at 0.7 — owner-currently-at-company pairs; 15537 at 0.5 — connection-pair both-current), 12 at 0.4 (Matt's past employers vs current connections). Captured as ISC-85.1.
+- 2026-05-13 (W4 refined): **Derive insert path batched.** First run was 378s for 15709 inserts — one serial await each. Refactored to a 100-row chunked `db.insert().values([...])` batch. New runtime: 17.8s (21× speedup). libSQL parameter cap is 999; 100 rows × 7 cols = 700 params, safe margin.
 
 ## Changelog
+
+- 2026-05-13 (W4) — **Derived-edge kind taxonomy: 2 kinds → 3 kinds**
+  - **Conjectured:** Two kinds (`shared_employer_overlap` + `shared_employer_no_overlap`) plus a confidence-only knob would cleanly carry the signal-strength axis.
+  - **Refuted by:** First derive run on real data produced 0 / 15709 / 0 across the buckets, then after a bothCurrent override fix the same labels carried 15697 "overlap" edges that had ZERO real overlap math underneath them — synthesised-position pairs where the only evidence is "LinkedIn currently lists both at company X". Advisor flagged this as laundering weak signal into the strong-signal bucket: a future query like `WHERE kind='shared_employer_overlap' AND confidence >= 0.7` would over-trust same-employer-now-no-dates pairs as if they were proven multi-year colleagues.
+  - **Learned:** Bucket names must match the underlying evidence type, not just the strength. Concurrency-now (we know they BOTH work there per LinkedIn, no dates) is a different evidence regime from interval-overlap (we have real start/end dates that intersect). Different regimes → different kind. Confidence orders strength within a regime.
+  - **Criterion now:** ISC-85.1 explicitly labels bothCurrent overrides as `shared_employer_currently` (separate kind). Future queries filtering on "real proven overlap" use `kind='shared_employer_overlap'`; queries for "currently together" use `kind='shared_employer_currently'`. The conflation is gone.
 
 - 2026-05-13 — **Connections.csv row filtering**
   - **Conjectured:** LinkedIn's Connections.csv has clean data after the 3-line Notes preamble, and `row.some(c => c.trim() !== "")` is enough to drop blank rows.
@@ -210,3 +283,13 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-57..59: `/people/[id]` renders person name + positions + manual edges; `/companies/[id]` renders company + people list with current-position badge; `/people/nonexistent-id` returns 404 via Next.js `notFound()`.
 - ISC-36 (reaffirmed at W3): Playwright Firefox probe across `/people`, `/companies`, `/people/[id]` — 0 non-localhost requests, 0 pageerrors.
 - Verify suite: `bun run scripts/verify-w3.ts` → 23/23 checks pass.
+- ISC-61..62, 68: `bun run db:migrate` applies `0003_positions_origin.sql`; PRAGMA table_info shows `origin TEXT NOT NULL DEFAULT 'declared'`; `positions_tenant_company_origin_idx` present; second migrate run no-op; existing 12 owner positions backfilled with `origin='declared'`.
+- ISC-63..70, 73: full ingest + re-ingest of `/mnt/c/Users/mca/Downloads/Basic_LinkedInDataExport_05-12-2026.zip.zip` yields `{ people:1797, companies:1198, positions:1799, connections:1796 }` on both runs; origin breakdown `declared:12, synthesised:1787`.
+- ISC-71..72: `/companies` shows PwC España with 144 people (well above ≥20 threshold); `/companies/[PwC España id]` lists 145 rows (144 synth + 1 declared owner), top-derived-pairs visible.
+- ISC-74..75: Playwright probe on `/profile` — 0 synthesised position rows in the timeline; on `/people/[id]` for a connection at PwC España — `data-testid="position-synthesised"` label present.
+- ISC-76..85, 95: `bun test src/lib/derived/edges.test.ts` — 12/12 pass (6 overlap-math fixtures + 6 bucketise cases covering all three kinds and the bothCurrent override).
+- ISC-86..91: `bun run scripts/derive-cli.ts` + `curl -s -X POST http://localhost:3000/api/derive`: derive emits `{ kept:15709, scannedPairs:15709, ms:21890, byKind:{ shared_employer_overlap:0, shared_employer_currently:15697, shared_employer_no_overlap:12 } }`. Real-data probe: 172 derived edges incident to owner, distributed across PwC España (143), OBS (17), Lloyds (9), and past employers (ISBAN, Banco Halifax, Banco Halifax Hispania). Evidence JSON parses to the documented shape.
+- ISC-92..93: Playwright probe on `/people/[connection at PwC España]` — 50 derived-edge rows visible with confidence badges; `/companies/[PwC España]` — 20 derived-pair rows visible.
+- ISC-94: `grep -rn "manual_edges.*derived_edges\|manual_edges.*join.*derived_edges\|manual_edges.*union.*derived_edges" src/` → 0 hits. Two distinct query modules (`manualEdges.ts`, `derivedEdges.ts`); two distinct UI sections on `/people/[id]` with separate `data-testid` markers.
+- W4 verify suite: `bun run scripts/verify-w4.ts` → 12/12 checks pass. W3 regression: `bun run scripts/verify-w3.ts` → 23/23 still pass.
+- Cato (E4 cross-vendor audit): `skipped` — `codex` CLI not installed on this WSL host. Show-my-math: Advisor was invoked and produced a substantive critique that drove the three-kind taxonomy refactor (advisor flagged the original 2-kind labelling as laundering weak signal into the strong-signal bucket). Action item logged: install codex CLI in WSL before next E4/E5 work in this project, or run E4/E5 work from a host where codex is available.

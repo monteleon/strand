@@ -77,6 +77,10 @@ export const companies = sqliteTable(
   }),
 );
 
+// `origin` distinguishes positions from Positions.csv (declared — real dates) vs
+// positions synthesised from a connection's `company` text (synthesised — current
+// employer known, dates unknown). Derived-edges math handles them differently;
+// profile timeline filters to declared only.
 export const positions = sqliteTable(
   "positions",
   {
@@ -95,10 +99,18 @@ export const positions = sqliteTable(
     startDate: text("start_date"),
     endDate: text("end_date"),
     current: integer("current", { mode: "boolean" }).notNull().default(false),
+    origin: text("origin", { enum: ["declared", "synthesised"] })
+      .notNull()
+      .default("declared"),
   },
   (t) => ({
     tenantPersonIdx: index("positions_tenant_person_idx").on(t.tenantId, t.personId),
     tenantCompanyIdx: index("positions_tenant_company_idx").on(t.tenantId, t.companyId),
+    tenantCompanyOriginIdx: index("positions_tenant_company_origin_idx").on(
+      t.tenantId,
+      t.companyId,
+      t.origin,
+    ),
   }),
 );
 
@@ -189,7 +201,12 @@ export const derivedEdges = sqliteTable(
       .notNull()
       .references(() => people.id, { onDelete: "cascade" }),
     kind: text("kind", {
-      enum: ["shared_employer_overlap", "shared_employer_no_overlap", "connection_date_cluster"],
+      enum: [
+        "shared_employer_overlap",
+        "shared_employer_currently",
+        "shared_employer_no_overlap",
+        "connection_date_cluster",
+      ],
     }).notNull(),
     evidenceJson: text("evidence_json").notNull(),
     confidence: real("confidence").notNull(),

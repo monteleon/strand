@@ -77,6 +77,7 @@ export async function getCompanyById(
       startDate: schema.positions.startDate,
       endDate: schema.positions.endDate,
       current: schema.positions.current,
+      origin: schema.positions.origin,
     })
     .from(schema.positions)
     .innerJoin(
@@ -92,7 +93,10 @@ export async function getCompanyById(
         eq(schema.positions.companyId, id),
       ),
     )
-    .orderBy(schema.people.fullName);
+    .orderBy(
+      sql`CASE ${schema.positions.origin} WHEN 'declared' THEN 0 ELSE 1 END`,
+      schema.people.fullName,
+    );
 
   return { company, people };
 }

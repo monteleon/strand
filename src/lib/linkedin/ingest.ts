@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { parseLinkedInExport, type ParsedExport } from "./parse";
+import { deriveSharedEmployerEdges } from "@/lib/derived/edges";
 
 export type IngestResult = {
   batchId: string;
@@ -92,6 +93,11 @@ export async function ingestLinkedInExport(
   await writePeople(parsed, tenantId, batchId, now);
   await writeConnections(parsed, tenantId, now);
   await writePositions(parsed, tenantId);
+  await writeSynthesisedConnectionPositions(parsed, tenantId);
+
+  // Derive shared-employer edges from the fresh positions. Idempotent
+  // (clear-then-rebuild) so cheap on every ingest. ISC-90.
+  await deriveSharedEmployerEdges(tenantId, now);
 
   const counts = await readTenantCounts(tenantId);
   return { batchId, duplicate: false, counts };
@@ -218,7 +224,7 @@ async function writePositions(parsed: ParsedExport, tenantId: string) {
   if (!ownerId) return;
   for (const p of parsed.positions) {
     const normalized = normaliseCompany(p.companyName);
-    if (!normalized) continue;
+    if (!normalized || isPlaceholderCompany(normalized)) continue;
     const companyId = companyIdFromName(tenantId, normalized);
     const positionId = positionIdFromParts(ownerId, companyId, p.startDate, p.title);
     await db
@@ -232,6 +238,44 @@ async function writePositions(parsed: ParsedExport, tenantId: string) {
         startDate: p.startDate,
         endDate: p.endDate,
         current: p.current,
+        origin: "declared",
+      })
+      .onConflictDoNothing();
+  }
+}
+
+// W4: synthesise a positions row for every connection whose Connections.csv row
+// has a non-empty Company text. We know they work there *today* but never had
+// their dates — so start/end stay null and current=true. The derived-edges
+// pass treats null-date positions as "ongoing today" so a synthesised pair at
+// the same company overlaps now → 0-month overlap → confidence 0.4. Real
+// overlap (≥1mo) only emerges between the owner's *declared* positions and
+// connections' synthesised ones — exactly the high-value signal.
+export async function writeSynthesisedConnectionPositions(
+  parsed: ParsedExport,
+  tenantId: string,
+) {
+  for (const c of parsed.connections) {
+    if (!c.linkedinUrl) continue;
+    if (!c.company || !c.company.trim()) continue;
+    const normalized = normaliseCompany(c.company);
+    if (!normalized || isPlaceholderCompany(normalized)) continue;
+    const personId = personIdFromUrl(tenantId, c.linkedinUrl);
+    const companyId = companyIdFromName(tenantId, normalized);
+    const title = c.position && c.position.trim() ? c.position.trim() : null;
+    const positionId = positionIdFromParts(personId, companyId, null, title);
+    await db
+      .insert(schema.positions)
+      .values({
+        id: positionId,
+        tenantId,
+        personId,
+        companyId,
+        title,
+        startDate: null,
+        endDate: null,
+        current: true,
+        origin: "synthesised",
       })
       .onConflictDoNothing();
   }

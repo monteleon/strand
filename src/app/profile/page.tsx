@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -16,14 +16,17 @@ async function loadOwner() {
     .where(eq(schema.people.id, tenant.ownerPersonId))
     .limit(1);
   if (!owner) return null;
-  const positionCount = await db.$count(
-    schema.positions,
+  // Profile timeline shows declared positions only — synthesised rows (from
+  // network metadata) belong to connections, not to the owner. ISC-74.
+  const declaredWhere = and(
     eq(schema.positions.personId, owner.id),
+    eq(schema.positions.origin, "declared"),
   );
+  const positionCount = await db.$count(schema.positions, declaredWhere);
   const currentPositions = await db
     .select()
     .from(schema.positions)
-    .where(eq(schema.positions.personId, owner.id));
+    .where(declaredWhere);
   return { owner, positionCount, currentPositions: currentPositions.filter((p) => p.current) };
 }
 
