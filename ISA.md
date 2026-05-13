@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: W5a — query surface (at-company + bookmarks)
-slug: w5a-at-company-and-bookmarks
+current_task: W5b — worked-with + by-year + reach queries
+slug: w5b-remaining-queries
 effort: E4
 phase: complete
-progress: 115/115
+progress: 145/145
 mode: ALGORITHM
 started: 2026-05-13
 updated: 2026-05-13
@@ -190,6 +190,46 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-114: `/queries/at-company` renders a "Saved queries" sidebar/section listing bookmarks for the tenant; each is a link to its URL with a delete button
 - [x] ISC-115: Anti: SQL injection probe — `?q=' OR 1=1 --` returns 200; offsite URL POST (`https://evil.com/x` or `//evil.com/x`) → 400 *(Anti: local-first — bookmarks must point at in-app paths only. Added post-Advisor review.)*
 
+**W5b — worked-with + by-year + reach** *(three remaining W5 query types)*
+
+*worked-with — collapse manual + derived edges incident to one person across companies*
+- [x] ISC-116: `/queries/worked-with` (no person selected) renders a person search input that autocompletes against `/api/people/search`
+- [x] ISC-117: `/queries/worked-with/[id]` for a nonexistent id returns 404 (Next.js notFound)
+- [x] ISC-118: `/queries/worked-with/[id]` renders the target person's name in the header
+- [x] ISC-119: `/queries/worked-with/[id]` renders a "Manual connections" section listing manual_edges incident to X with each other-person's name + note
+- [x] ISC-120: `/queries/worked-with/[id]` renders a "Derived connections" section listing derived_edges incident to X sorted by confidence desc, then overlap_months desc, with company name + confidence label
+- [x] ISC-121: For X = a real PwC España connection, derived section renders ≥10 rows
+- [x] ISC-122: Anti: manual and derived sections are queried via the two separate query modules (`manualEdges.ts` and `derivedEdges.ts`); never merged in one list
+- [x] ISC-123: `/queries/worked-with/[id]` shows a "Bookmark this query" affordance and the saved-queries sidebar
+
+*by-year — connections histogram + per-year drilldown*
+- [x] ISC-124: `/queries/by-year` (no year selected) renders a histogram: rows of `(year, count)` ordered by year desc, including an "Unknown" bucket for NULL `connected_at`
+- [x] ISC-125: Histogram counts sum to the total non-owner connections in the tenant
+- [x] ISC-126: `/queries/by-year?year=YYYY` renders the list of people connected that year, sorted alphabetically by full_name
+- [x] ISC-127: `/queries/by-year?year=unknown` renders people whose `connected_at` is NULL
+- [x] ISC-128: `/queries/by-year?year=2099` for a year with no connections renders "no people connected this year" without crashing
+- [x] ISC-129: Anti: `?year=`'OR 1=1 --` is parameter-bound (parameterised SQL); returns 200 with empty list, no crash
+- [x] ISC-130: `/queries/by-year` shows the saved-queries sidebar
+
+*reach — ranked intermediaries from owner to X*
+- [x] ISC-131: `/queries/reach` (no person selected) renders a person search input
+- [x] ISC-132: `/queries/reach/[id]` for a nonexistent id returns 404
+- [x] ISC-133: `/queries/reach/[id]` for the owner returns a "this is you" panel (no path search), not an empty list
+- [x] ISC-134: `/queries/reach/[id]` for a direct 1st-degree connection X surfaces a "You're directly connected to X" panel at the top, with the connection date if known
+- [x] ISC-135: `/queries/reach/[id]` renders a ranked "Strongest reach" list: for each Y∈owner's connections that has a manual_edge or derived_edge to X, score = 1.0 if manual, else derived.confidence; sorted desc, ties broken by manual > derived then overlap_months desc
+- [x] ISC-136: Per intermediary Y, the rendered evidence is the strongest single edge (Y↔X). Manual edges show the note; derived edges show company name + overlap months + confidence label
+- [x] ISC-137: For X with no incident edges at all and no direct 1st-degree connection, the page renders "No path found through your network" without crashing
+- [x] ISC-138: For X = a derived-rich PwC España connection, the reach list renders ≥5 ranked intermediaries
+- [x] ISC-139: Anti: reach query DOES NOT include the target person X as their own intermediary (Y = X is filtered out)
+- [x] ISC-140: Anti: reach query DOES NOT include intermediaries Y where Y is not a 1st-degree owner connection
+- [x] ISC-141: `/queries/reach/[id]` shows a "Bookmark this query" affordance
+
+*shared*
+- [x] ISC-142: All three query pages (`worked-with`, `by-year`, `reach`) render the saved-queries sidebar consistently
+- [x] ISC-143: Anti: zero non-localhost network requests across all three pages during a Playwright probe pass
+- [x] ISC-144: All three pages render with 0 page errors and 0 console errors during Playwright probe
+- [x] ISC-145: All three query URLs round-trip through POST /api/bookmarks → DELETE — the bookmark plumbing built in W5a accepts the new URL shapes without modification
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -231,6 +271,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | ISC-109..112 | http | curl POST/DELETE /api/bookmarks | status + JSON shape | curl -i |
 | ISC-113..114 | ui | playwright at /queries/at-company | bookmark affordance + listing visible after POST | playwright firefox |
 | ISC-115 | http+ui | bad-input probes | 200/404, no crash | curl + playwright |
+| ISC-116..123 | ui | playwright at /queries/worked-with and /queries/worked-with/[id] | expected selectors + counts | playwright firefox |
+| ISC-124..130 | ui | playwright at /queries/by-year and ?year=YYYY | histogram + drilldown render | playwright firefox |
+| ISC-131..141 | ui | playwright at /queries/reach and /queries/reach/[id] | reach list correct shape + special states | playwright firefox |
+| ISC-142..144 | ui | playwright across all three pages | sidebar present, 0 errors, 0 non-localhost | playwright firefox |
+| ISC-145 | http | curl POST/DELETE bookmarks with the new URL shapes | 201 → 204 round-trip | curl |
 
 ## Features
 
@@ -255,6 +300,9 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | at-company-page *(W5a)* | ISC-98..108 | schema-migration-0004 | yes (with bookmarks-api) |
 | bookmarks-api *(W5a)* | ISC-109..112 | schema-migration-0004 | yes |
 | bookmarks-ui *(W5a)* | ISC-113..115 | bookmarks-api, at-company-page | no |
+| worked-with-page *(W5b)* | ISC-116..123 | (existing manualEdges + derivedEdges queries) | yes (with by-year-page) |
+| by-year-page *(W5b)* | ISC-124..130 | (existing connections table) | yes (with worked-with-page) |
+| reach-page *(W5b)* | ISC-131..141 | (existing manual + derived + connections) | no |
 
 ## Decisions
 
@@ -281,7 +329,17 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-13 (W5a): **Bookmark URL validated as in-app relative path.** Local-first means a bookmark must point inside the app. Without validation, a POST of `{ name: "x", url: "https://evil.com/y" }` would create a sidebar link to an offsite URL — the app would render it as a normal anchor and the click would leave localhost. Validation rejects anything not starting with `/`, and also rejects protocol-relative `//evil.com` (which would be parsed as offsite by the browser). Added post-Advisor review.
 - 2026-05-13 (W5a): **Other three W5 queries deferred to W5b.** User scope choice at OBSERVE: build only the at-company surface this session. `worked-with`, `by-year`, and `reach` are next-session work. Reach-rank algorithm pre-decided: confidence × 1-hop-count (manual edges at 1.0 always rank above derived; same-bucket derived ties broken by overlap_months desc).
 
+- 2026-05-13 (W5b): **Reach-rank formula clarified: `max(confidence)`, not `count × confidence`.** The user-approved option label was "Confidence × 1‑hop‑count" but the option *description* spelled out the operational rule: "score = confidence(Y↔X). Manual edges fixed at 1.0, derived edges by their stored confidence. Tied on confidence → prefer manual over derived, prefer longer overlapMonths." The "1-hop-count" phrasing was an algorithm-class name (1-hop graph traversal: owner→Y→X is one hop from Y) not a multiplicative count of edges. Implementation matches the description: per intermediary Y, score = 1.0 if any manual edge (Y, X) exists, else max(derived.confidence) across all (Y, X) derived edges. Multiple corroborating derived edges to the same Y do NOT compound the score — taking max avoids double-counting noisy same-employer signals (e.g., Y who shows up in 3 PwC sub-orgs would otherwise outrank a single high-confidence intro). Refactor to a probabilistic-OR (`1 - ∏(1-c_i)`) is a future call when the data has enough independent edges per pair to justify it.
+- 2026-05-13 (W5b): **`directConnection` is data-driven, not schema-invariant-driven.** For v1, every non-owner in `people` is in `connections` (Connections.csv populates both). That means `directConnection` is tautologically true for any valid target X. Implementation still queries the `connections` table explicitly so the day a person enters via a derived-only path (future scrape, manual seed, multi-tenant friend's data), the panel hides itself. Documented intent: "non-owner without direct edge → page shows reach-only state."
+- 2026-05-13 (W5b): **by-year bucketing is safe by ingest invariant, not by runtime parsing.** `substr(connected_at, 1, 4)` assumes ISO `YYYY-MM-DD`. The LinkedIn parser `parseConnectionDate` enforces this format and returns null on any failed parse (`/^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/`); null lands as NULL in DB and falls into the 'unknown' bucket via the `connected_at IS NULL` branch. No runtime guard added: the ingest pipeline is the single ingestion point for `connected_at`, and the parser is unit-tested. If future ingestion routes (manual edit, external API) emit non-ISO dates, that's an ingest bug to fix at the new ingestion point, not a downstream guard.
+
 ## Changelog
+
+- 2026-05-13 (W5b) — **Option labels vs option descriptions drift**
+  - **Conjectured:** When an AskUserQuestion option is labelled `"Confidence × 1‑hop‑count"`, the multiplicative form is the contract, regardless of the option's prose description.
+  - **Refuted by:** Advisor closing call on W5b. The option label was a class-name (1-hop graph traversal) but the option description spelled out the actual operational rule (`score = confidence(Y↔X)`, manual=1.0). My implementation matched the description but the label suggested a different formula — a real ambiguity that would have bitten future readers.
+  - **Learned:** When a user picks an option, the description is the contract. Label is sales copy. Future ISC writing: if the label is class-name-shaped ("Strategy A", "Buckets", "Heuristic"), restate the operational rule in the option description AND copy it verbatim into the ISC text. Don't let the slogan-sized label do load-bearing work.
+  - **Criterion now:** ISC-135 spells out the formula explicitly (`manual ? 1.0 : max(derived.confidence)`); W5b Decisions entry captures the label/description drift so future-Claude doesn't re-derive the wrong formula.
 
 - 2026-05-13 (W4) — **Derived-edge kind taxonomy: 2 kinds → 3 kinds**
   - **Conjectured:** Two kinds (`shared_employer_overlap` + `shared_employer_no_overlap`) plus a confidence-only knob would cleanly carry the signal-strength axis.
@@ -334,3 +392,10 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-113..114 (W5): Playwright probe — `[data-testid="save-bookmark"]` present on selected-company page; after POST, `[data-testid="saved-query-row"]` reflects the new bookmark.
 - ISC-115 (W5): SQL injection probe on `?q=' OR 1=1 --` returns 200; offsite + protocol-relative URL POSTs both 400 per local-first anti-criterion.
 - W5 verify suite: `bun run scripts/verify-w5.ts` → 29/29 pass. Regressions: `verify-w3.ts` 23/23, `verify-w4.ts` 12/12 still green. Unit tests: 18/18.
+- ISC-116..123 (W5b worked-with): Playwright probes — picker + sidebar visible at `/queries/worked-with`; `/queries/worked-with/<karla>` renders heading "Karla Vasquez", manual + derived sections both present, derived list = 17 rows, SaveBookmark visible; nonexistent id → 404.
+- ISC-124..130 (W5b by-year): histogram renders 20 buckets summing to 1796 non-owner connections (matches `connections` count); `?year=2021` renders 217 people; `?year=unknown` renders "Unknown year" heading; `?year=2099` renders empty state; SQL inj `?year=' OR 1=1 --` → 200, parameter-bound; sidebar always visible.
+- ISC-131..141 (W5b reach): picker visible; reach-to-owner renders 'this is you' panel with no candidates; reach-to-PwC-connection renders direct-connection panel + 16 ranked intermediaries; target X never appears in its own reach list (selfPair=0 across the rendered list); nonexistent id → 404; SaveBookmark visible.
+- ISC-142..144 (W5b shared): all three pages render the saved-queries sidebar; 0 non-localhost requests across the Playwright pass; 0 page errors.
+- ISC-145 (W5b bookmark round-trip): POST /api/bookmarks → DELETE round-trip succeeded on all 3 new URL shapes (`worked-with/[id]`, `by-year?year=YYYY`, `reach/[id]`) — bookmark plumbing handles them unmodified.
+- W5b verify suite: `bun run scripts/verify-w5b.ts` → 33/33 pass. Full regression: `verify-w3.ts` 23/23, `verify-w4.ts` 12/12, `verify-w5.ts` 29/29, `bun test` 18/18 all still green.
+- Cato (E4 cross-vendor audit, W5b): `skipped` — codex CLI still not installed on WSL host (same gap as W4/W5a). Advisor invoked and produced a substantive critique (scoring-formula label drift; data-driven vs invariant-driven directConnection; substr fragility) — all three are documented in W5b Decisions; nothing required code changes.

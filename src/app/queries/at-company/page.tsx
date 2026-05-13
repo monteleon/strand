@@ -9,7 +9,7 @@ import {
 } from "@/lib/queries/companies";
 import { listSavedQueries } from "@/lib/queries/savedQueries";
 import { SaveBookmark } from "@/components/save-bookmark";
-import { DeleteBookmark } from "@/components/delete-bookmark";
+import { SavedQueriesSidebar } from "@/components/saved-queries-sidebar";
 
 export const dynamic = "force-dynamic";
 
@@ -130,7 +130,7 @@ export default async function AtCompanyPage({
           )}
         </section>
 
-        <BookmarkSidebar bookmarks={bookmarks} />
+        <SavedQueriesSidebar bookmarks={bookmarks} />
       </main>
     );
   }
@@ -256,7 +256,7 @@ export default async function AtCompanyPage({
         <SaveBookmark url={url} />
       </section>
 
-      <BookmarkSidebar bookmarks={bookmarks} />
+      <SavedQueriesSidebar bookmarks={bookmarks} />
     </main>
   );
 }
@@ -287,43 +287,3 @@ function FilterChip({
   );
 }
 
-function BookmarkSidebar({
-  bookmarks,
-}: {
-  bookmarks: Awaited<ReturnType<typeof listSavedQueries>>;
-}) {
-  return (
-    <section className="mt-12" data-testid="saved-queries-section">
-      <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
-        Saved queries
-      </h2>
-      {bookmarks.length === 0 ? (
-        <p className="mt-3 text-sm text-muted-foreground">
-          No saved queries yet. Bookmark this query (above) to save the
-          current filter combination.
-        </p>
-      ) : (
-        <ul
-          data-testid="saved-queries-list"
-          className="mt-4 divide-y divide-border rounded-md border border-border"
-        >
-          {bookmarks.map((b) => (
-            <li
-              key={b.id}
-              data-testid="saved-query-row"
-              className="flex items-center justify-between gap-3 px-4 py-3 text-sm"
-            >
-              <Link
-                href={b.url}
-                className="block flex-1 truncate hover:underline"
-              >
-                {b.name}
-              </Link>
-              <DeleteBookmark id={b.id} name={b.name} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}

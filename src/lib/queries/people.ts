@@ -142,3 +142,63 @@ export async function searchPeople(
 // LIKE expression matcher used for /companies — alias re-exported here so the
 // companies query module can use the same parameterised-substring pattern.
 export const likeIgnoreCase = (q: string) => like(sql`lower(x)`, `%${q}%`);
+
+// W5b — connections-by-year histogram. Owner is excluded. NULL connected_at
+// is bucketed under "unknown". substr(connected_at, 1, 4) is safe because
+// connected_at is stored as YYYY-MM-DD (parser enforces this format).
+export type ConnectionYearBucket = { year: string; count: number };
+
+export async function listConnectionYears(
+  tenantId: string = LOCAL_TENANT_ID,
+): Promise<ConnectionYearBucket[]> {
+  const ownerId = await getOwnerId(tenantId);
+  const rows = await db.all<{ year: string | null; n: number }>(sql`
+    SELECT
+      CASE
+        WHEN c.connected_at IS NULL THEN NULL
+        ELSE substr(c.connected_at, 1, 4)
+      END AS year,
+      COUNT(*) AS n
+    FROM connections c
+    WHERE c.tenant_id = ${tenantId}
+      ${ownerId ? sql`AND c.to_person_id != ${ownerId}` : sql``}
+    GROUP BY year
+    ORDER BY (year IS NULL) ASC, year DESC
+  `);
+  return rows.map((r) => ({
+    year: r.year ?? "unknown",
+    count: r.n,
+  }));
+}
+
+// People connected in a given year. `year="unknown"` matches NULL.
+export async function listPeopleByYear(
+  year: string,
+  tenantId: string = LOCAL_TENANT_ID,
+): Promise<Array<{ id: string; fullName: string; headline: string | null; connectedAt: string | null }>> {
+  const ownerId = await getOwnerId(tenantId);
+  const yearFilter =
+    year === "unknown"
+      ? sql`AND c.connected_at IS NULL`
+      : sql`AND substr(c.connected_at, 1, 4) = ${year}`;
+  const rows = await db.all<{
+    id: string;
+    full_name: string;
+    headline: string | null;
+    connected_at: string | null;
+  }>(sql`
+    SELECT p.id, p.full_name, p.headline, c.connected_at
+    FROM connections c
+    INNER JOIN people p ON p.id = c.to_person_id AND p.tenant_id = c.tenant_id
+    WHERE c.tenant_id = ${tenantId}
+      ${ownerId ? sql`AND c.to_person_id != ${ownerId}` : sql``}
+      ${yearFilter}
+    ORDER BY p.full_name ASC
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    fullName: r.full_name,
+    headline: r.headline,
+    connectedAt: r.connected_at,
+  }));
+}
