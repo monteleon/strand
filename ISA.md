@@ -3,7 +3,7 @@ project: strand
 current_task: W2 — LinkedIn export ingest
 slug: w2-linkedin-ingest
 effort: E3
-phase: verify
+phase: complete
 progress: 37/48
 mode: ALGORITHM
 started: 2026-05-13
