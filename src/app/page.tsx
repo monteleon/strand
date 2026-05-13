@@ -1,11 +1,22 @@
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 
-const routes = [
-  { name: "Upload", path: "/upload", week: "W2", description: "Drop your LinkedIn .zip export here" },
-  { name: "People", path: "/people", week: "W3", description: "Browse and filter your connections" },
-  { name: "Companies", path: "/companies", week: "W3", description: "Everyone in your network who has worked at X" },
-  { name: "Queries", path: "/queries", week: "W5", description: "Who do I know at X · who's worked with whom · closest path" },
-  { name: "Graph", path: "/graph", week: "W6", description: "Force-directed view of your network" },
+type RouteStatus = "live" | "next" | "later";
+
+const routes: Array<{
+  name: string;
+  path: string;
+  status: RouteStatus;
+  badge: string;
+  description: string;
+}> = [
+  { name: "Upload", path: "/upload", status: "live", badge: "Live", description: "Drop your LinkedIn .zip export here" },
+  { name: "Profile", path: "/profile", status: "live", badge: "Live", description: "Your own owner identity from Profile.csv" },
+  { name: "People", path: "/people", status: "live", badge: "Live", description: "Browse and filter your connections" },
+  { name: "Companies", path: "/companies", status: "live", badge: "Live", description: "Everyone in your network who has worked at X" },
+  { name: "Derived edges", path: "/graph", status: "next", badge: "W4", description: "Shared employer + overlap inference — who knows who within your network" },
+  { name: "Queries", path: "/queries", status: "later", badge: "W5", description: "Who do I know at X · who's worked with whom · closest path" },
+  { name: "Graph", path: "/graph", status: "later", badge: "W6", description: "Force-directed Cytoscape view of your network" },
 ];
 
 export default function HomePage() {
@@ -44,23 +55,37 @@ export default function HomePage() {
           Roadmap
         </h2>
         <ul className="mt-4 divide-y divide-border rounded-md border border-border">
-          {routes.map((r) => (
-            <li
-              key={r.path}
-              className={cn(
-                "flex items-baseline justify-between gap-4 px-4 py-3",
-                "text-sm",
-              )}
-            >
-              <div className="flex flex-1 items-baseline gap-3">
-                <span className="font-medium">{r.name}</span>
-                <span className="text-muted-foreground">{r.description}</span>
+          {routes.map((r) => {
+            const row = (
+              <div className="flex items-baseline justify-between gap-4 text-sm">
+                <div className="flex flex-1 items-baseline gap-3">
+                  <span className="font-medium">{r.name}</span>
+                  <span className="text-muted-foreground">{r.description}</span>
+                </div>
+                <span
+                  className={cn(
+                    "rounded-sm px-2 py-0.5 text-xs font-medium",
+                    r.status === "live"
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {r.badge}
+                </span>
               </div>
-              <span className="rounded-sm bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                {r.week}
-              </span>
-            </li>
-          ))}
+            );
+            return (
+              <li key={r.name + r.path} className="px-4 py-3">
+                {r.status === "live" ? (
+                  <Link href={r.path} className="block -mx-4 px-4 py-1 rounded hover:bg-muted/40">
+                    {row}
+                  </Link>
+                ) : (
+                  <div className="opacity-60 cursor-not-allowed">{row}</div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </section>
 
