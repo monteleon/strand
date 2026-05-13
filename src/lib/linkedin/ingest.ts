@@ -126,6 +126,11 @@ async function writeOwner(
     .where(eq(schema.tenants.id, tenantId));
 }
 
+// Treat placeholders like "---", "n/a", "—" as missing rather than companies.
+function isPlaceholderCompany(normalized: string): boolean {
+  return !/[a-z0-9]/.test(normalized);
+}
+
 async function writeCompanies(parsed: ParsedExport, tenantId: string) {
   // Union of companies from positions + connections.company text.
   const names = new Set<string>();
@@ -137,7 +142,7 @@ async function writeCompanies(parsed: ParsedExport, tenantId: string) {
   }
   for (const raw of names) {
     const normalized = normaliseCompany(raw);
-    if (!normalized) continue;
+    if (!normalized || isPlaceholderCompany(normalized)) continue;
     await db
       .insert(schema.companies)
       .values({

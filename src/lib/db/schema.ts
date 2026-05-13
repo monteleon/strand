@@ -148,6 +148,31 @@ export const messages = sqliteTable(
   }),
 );
 
+// Manual edges = facts the owner asserts (1st-hand knowledge). Distinct
+// from derived_edges (inferred). Undirected: canonicalised so person_a < person_b
+// lex; one row per pair.
+export const manualEdges = sqliteTable(
+  "manual_edges",
+  {
+    tenantId: text("tenant_id")
+      .notNull()
+      .references(() => tenants.id),
+    personA: text("person_a")
+      .notNull()
+      .references(() => people.id, { onDelete: "cascade" }),
+    personB: text("person_b")
+      .notNull()
+      .references(() => people.id, { onDelete: "cascade" }),
+    note: text("note"),
+    assertedAt: integer("asserted_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.tenantId, t.personA, t.personB] }),
+    aIdx: index("manual_edges_a_idx").on(t.tenantId, t.personA),
+    bIdx: index("manual_edges_b_idx").on(t.tenantId, t.personB),
+  }),
+);
+
 // Derived edges power "who knows who" within your network. LinkedIn does not
 // expose the 2nd-degree graph; everything in this table is inferred from
 // shared employment + overlapping dates. Idempotent on (person_a, person_b, kind).
