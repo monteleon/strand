@@ -1,0 +1,1 @@
+ALTER TABLE `tenants` ADD `owner_person_id` text;

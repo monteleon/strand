@@ -11,8 +11,11 @@ import {
 // Every entity table carries tenant_id so the multi-tenant fork (post-v0.1.0)
 // is a one-pass migration, not a rewrite. In single-tenant mode, every row
 // is tenant_id = 'local'.
+// owner_person_id anchors 1st-degree edges: every connection row points
+// out from the owner. Set during ingest from Profile.csv; null pre-ingest.
 export const tenants = sqliteTable("tenants", {
   id: text("id").primaryKey(),
+  ownerPersonId: text("owner_person_id"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
