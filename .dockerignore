@@ -1,0 +1,28 @@
+# Don't copy your local SQLite database into the image — the runtime
+# expects an empty /app/data and migrates on first boot. Bind-mount
+# data/ at run time to persist across restarts.
+data/
+
+# Build artefacts and local cruft.
+node_modules/
+.next/
+.git/
+.gitignore
+.dockerignore
+.env*
+*.log
+tmp/
+
+# Editor / OS cruft.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local-only artefacts from earlier weeks.
+docs/screenshots/
+/tmp/
+
+# Don't ship the project plan or ISA — they're for the maintainer,
+# not the runtime.
+ISA.md

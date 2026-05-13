@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: W6 — Cytoscape force-directed graph view
-slug: w6-graph-view
-effort: E4
+current_task: W7 — polish, README, Docker, v0.1.0 prep
+slug: w7-release-polish
+effort: E3
 phase: complete
-progress: 165/165
+progress: 185/185
 mode: ALGORITHM
 started: 2026-05-13
 updated: 2026-05-13
@@ -252,6 +252,28 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-164: `/graph` page is added to the home-page roadmap as a live link (replace the placeholder W6 entry in the routes array)
 - [x] ISC-165: Anti: the home-page roadmap's "Derived edges" stale entry that pointed at `/graph` is removed (derived edges live on /people/[id] and /companies/[id], not on a dedicated page)
 
+**W7 — Release polish for v0.1.0**
+- [x] ISC-166: `scripts/screenshots.ts` exists and captures 6 routes (`/upload`, `/profile`, `/people`, `/companies/<PwC España id>`, `/queries/at-company?company=<PwC España id>&status=current`, `/graph`) to `docs/screenshots/`
+- [x] ISC-167: `docs/screenshots/` contains exactly 6 PNG files after the script runs, each non-empty (size > 1KB)
+- [x] ISC-168: `README.md` includes a Quick Start section showing `git clone && bun install && bun run db:migrate && bun dev`
+- [x] ISC-169: `README.md` includes a Docker section showing `docker build -t strand .` and `docker run -p 3000:3000 -v $(pwd)/data:/app/data strand`
+- [x] ISC-170: `README.md` references the captured screenshots via relative `docs/screenshots/<name>.png` paths
+- [x] ISC-171: `README.md` accurately states the SQLite driver as `@libsql/client` (not the stale W1 mention of `better-sqlite3`)
+- [x] ISC-172: `README.md` accurately describes the 3-kind derived-edges taxonomy (`shared_employer_overlap`, `shared_employer_currently`, `shared_employer_no_overlap`)
+- [x] ISC-173: `README.md` accurately states "LinkedIn export bytes are parsed in-memory and never persisted to disk" (matches ISC-37 anti)
+- [x] ISC-174: `README.md` roadmap marks W1–W7 with their actual landed-or-in-flight status (no future-tense for shipped weeks)
+- [x] ISC-175: `README.md` link to the `CONTRIBUTING.md` file
+- [x] ISC-176: `Dockerfile` exists at the repo root, uses an `oven/bun` base image, runs `bun install` + `bun run build`, exposes port 3000
+- [x] ISC-177: `.dockerignore` exists at the repo root and excludes `data/`, `node_modules/`, `.git/`, `tmp/`, `*.log`
+- [x] ISC-178: `CONTRIBUTING.md` exists at the repo root and points to `Projects/Strand/ISA.md` as the project state-of-record
+- [x] ISC-179: `LICENSE` exists at the repo root, MIT, with copyright holder `Matt Alexander` and year 2026
+- [x] ISC-180: `package.json` `version` is `0.1.0-rc.1` (proper semver pre-release identifier; bumped from initial `0.1.0-pre` after Advisor flagged the smell)
+- [x] ISC-181: `package.json` `license` is `MIT` (not `UNLICENSED`)
+- [x] ISC-182: `package.json` exposes a `screenshots` script that runs `bun run scripts/screenshots.ts`
+- [x] ISC-183: Anti: `data/` and any `.zip` exports are NOT staged in the W7 commit
+- [x] ISC-184: Anti: `Dockerfile` does NOT copy `data/strand.db` into the image (ingest-on-first-run is the intended model)
+- [x] ISC-185: All prior verify scripts (`verify-w3`, `verify-w4`, `verify-w5`, `verify-w5b`, `verify-w6`) still pass after W7 changes
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -359,6 +381,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-13 (W6): **Cytoscape goes through `next/dynamic` with ssr:false, not `"use client"` alone.** `cytoscape()` touches `document` synchronously at instantiation. A bare `"use client"` component still runs on the server during SSR/streaming, then hydrates — the server pass would error on the missing document. `next/dynamic(() => import(...), { ssr: false })` defers the import + render to the client entirely. The server emits the `<GraphSkeleton />` shell; the client hydrates and runs Cytoscape against real DOM.
 - 2026-05-13 (W6): **Owner colour reserved via shape/size, not hue band.** Advisor flagged a possible collision between owner red (~hue 0°) and company hashes that land near 0°. Mitigation chosen: owner gets distinct *shape* (no border-radius circle vs. small circle) and *size* (26px vs 16px) plus a thick outline, not a hue-band reservation. Easier to read at low DPI; survives any colour-blind palette swap; and the owner node is also positioned at the gravitational centre by cose so it's already visually obvious.
 
+- 2026-05-13 (W7): **`0.1.0-rc.1` not `0.1.0-pre` for the pre-release version.** Initially picked `0.1.0-pre` because it reads naturally, but Advisor flagged it as a semver smell: bare `-pre` with no numeric identifier is technically valid but unusual and trips some tooling. `0.1.0-rc.1` is the standard release-candidate convention, clearly orderable (`0.1.0-rc.1 < 0.1.0-rc.2 < 0.1.0`), and matches the actual state (this commit is RC1; bump to `0.1.0` when you tag for real).
+- 2026-05-13 (W7): **Docker not built locally — `docker build` is the user's manual action.** WSL host has no Docker. Dockerfile syntactically matches the standard Bun + Next two-stage pattern, and the three failure modes Advisor highlighted (`HOSTNAME=0.0.0.0` for container reachability, non-root `USER bun`, `.dockerignore` excluding `data/`) are all addressed. `output: 'standalone'` deliberately *not* added — it's an image-size optimisation, not correctness; the current `next start` pattern works without it. Filed as post-v0.1.0.
+- 2026-05-13 (W7): **v0.1.0 tag + GitHub release is the user's manual action.** No git remote configured in this repo. The flip-to-public, the actual `git tag v0.1.0`, the GitHub Releases entry, and the bump to `0.1.0` (drop the `-rc.1`) all happen by hand when the user is ready. Documented in W7 Decisions so future-Claude doesn't try to push on its own.
+- 2026-05-13 (W7): **Screenshot capture is viewport-only, not full-page.** Initial full-page captures hit 2MB+ for the /companies/[id] and /queries pages (145-row lists scroll for ages). Viewport-only kept total screenshot footprint at ~770KB across 6 files — fine for git, fine for a README first-impression on GitHub repo cards. Trade-off: screenshots don't show the full list, but they show the feature, which is what they're for.
+
 ## Changelog
 
 - 2026-05-13 (W6) — **Densifying a force-directed graph "for visual interest" cost 30× the HTML payload**
@@ -439,3 +466,14 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-164..165 (W6 roadmap): home page route list updated to surface all 4 query pages + `/graph` as live links; the stale `Derived edges → /graph` entry removed.
 - W6 verify suite: `bun run scripts/verify-w6.ts` → 11/11 pass. Full regression: `verify-w3.ts` 23/23, `verify-w4.ts` 12/12, `verify-w5.ts` 29/29, `verify-w5b.ts` 33/33, `bun test` 18/18 all still green.
 - Cato (E4 cross-vendor audit, W6): `skipped` — codex CLI still not installed on WSL host. Advisor invoked and surfaced the "is this a star?" structural question; investigation confirmed the star is intentional in the v1 dataset (all 0.5-confidence edges are connection-to-connection within-employer pairs that would emit ~9k edges if densified). Documented in W6 Decisions with a follow-up flag for an explicit "show within-cluster mid-confidence" toggle in a future session.
+- ISC-166..167 (W7): `scripts/screenshots.ts` runs in ~30s against `bun dev`, captures 6 viewport-sized PNGs to `docs/screenshots/` (range 53KB–346KB, total ~770KB).
+- ISC-168..175 (W7): README rewrite verified by `verify-w7.ts` content asserts — Bun quick start, Docker section with bind-mount, screenshot references, `@libsql/client` driver (no stale `better-sqlite3` mention), 3-kind taxonomy spelled out, in-memory-parse privacy claim, roadmap with W4/W6 marked shipped + W7 in flight, CONTRIBUTING.md link.
+- ISC-176..177 (W7): Dockerfile two-stage build (oven/bun:1.3-alpine builder + runner), bun install + bun run build + bun run db:migrate-on-start, `HOSTNAME=0.0.0.0` so the container is reachable from host port-forward, drops to non-root `bun` user, `data/` volume declared. `.dockerignore` excludes `data/`, `node_modules/`, `.git/`, `.next/`, `docs/screenshots/`, ISA.md.
+- ISC-178..179 (W7): `CONTRIBUTING.md` points at `Projects/Strand/ISA.md` as project state-of-record; `LICENSE` is MIT with copyright `(c) 2026 Matt Alexander`.
+- ISC-180..182 (W7): `package.json` `version`: `0.1.0-rc.1` (proper-semver pre-release), `license`: `MIT` (no longer `UNLICENSED`), `scripts.screenshots` exposed.
+- ISC-183..184 (W7 anti): `data/` is in both `.gitignore` (W1) and `.dockerignore` (W7); no `COPY data/` or `COPY ... strand.db` line in the Dockerfile (matched by regex).
+- ISC-185 (W7 regression): all prior verify suites still green after W7 file additions — `verify-w3` 23/23, `verify-w4` 12/12, `verify-w5` 29/29, `verify-w5b` 33/33, `verify-w6` 11/11, `bun test` 18/18, `tsc --noEmit` clean.
+- W7 verify suite: `bun run scripts/verify-w7.ts` → 32/32 pass.
+- **Docker not built locally** — `docker` is not installed on this WSL host. Dockerfile is syntactically sound and matches the standard Bun + Next two-stage pattern; the user must run `docker build -t strand .` once from a host with Docker before tagging `v0.1.0`. Captured as a follow-up action item rather than a code change.
+- **`output: 'standalone'` deferred** — Advisor flagged this as the #1 Dockerfile-syntactically-sound-but-runtime-broken trap, but the current pattern uses `bun run start` (=`next start`) against the regular `.next` build, which works without standalone. The standalone output would shrink the runtime image (no devDeps in node_modules) but is an optimisation, not a correctness fix. Filed for post-v0.1.0.
+- **v0.1.0 tag is a user action.** No git remote is configured. The tag + push + GitHub release stay manual, with the package.json version bump to `0.1.0` happening at that point. Captured in W7 Decisions so future-Claude doesn't try to push on its own.
