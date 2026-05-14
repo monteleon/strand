@@ -1,13 +1,13 @@
 ---
 project: strand
-current_task: W7 — polish, README, Docker, v0.1.0 prep
-slug: w7-release-polish
+current_task: W8a — docker build + v0.1.0 tag
+slug: w8a-docker-tag
 effort: E3
 phase: complete
-progress: 185/185
+progress: 202/202
 mode: ALGORITHM
-started: 2026-05-13
-updated: 2026-05-13
+started: 2026-05-14
+updated: 2026-05-14
 ---
 
 # Strand — ISA
@@ -274,6 +274,25 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-184: Anti: `Dockerfile` does NOT copy `data/strand.db` into the image (ingest-on-first-run is the intended model)
 - [x] ISC-185: All prior verify scripts (`verify-w3`, `verify-w4`, `verify-w5`, `verify-w5b`, `verify-w6`) still pass after W7 changes
 
+**W8a — Docker build + v0.1.0 tag**
+- [x] ISC-186: `docker.io` installed via apt on this WSL host
+- [x] ISC-187: `docker --version` returns a Docker version string (`Docker version 29.1.3`)
+- [x] ISC-188: `docker info` reports a running daemon (Server section present, v29.1.3)
+- [x] ISC-189: socket access for user `mca` (via group OR `chmod 666 /var/run/docker.sock` fallback)
+- [x] ISC-190: `docker build -t strand:0.1.0 -t strand:latest .` exits 0
+- [x] ISC-191: built image size <2 GB (actual: 1.76 GB)
+- [x] ISC-192: `docker run -d -p 3001:3000 -v ...:/app/data strand:0.1.0` returns a container id
+- [x] ISC-193: container logs show `db:migrate` completed + Next.js Ready within 30s (actual: 2s, Ready in 661ms)
+- [x] ISC-194: `curl -sf http://localhost:3001` returns HTTP 200
+- [x] ISC-195: `curl http://localhost:3001/upload` body contains the drag-drop upload UI marker
+- [x] ISC-196: container `docker stop` + `docker rm` cleanly (no longer in `docker ps -a`)
+- [x] ISC-197: Anti: zero outbound (non-localhost) URLs in rendered HTML of `/` or `/upload`
+- [x] ISC-198: `package.json` `version` updated `0.1.0-rc.1` → `0.1.0` (commit 583863c)
+- [x] ISC-199: release-bump commit lands with `release: v0.1.0` message, tree clean after
+- [x] ISC-200: annotated tag `v0.1.0` created locally, points at `5e6c272` (release: fix v0.1.0 drift strings)
+- [x] ISC-201: Anti: no `git push` executed by Claude (push is user action per W7 close)
+- [x] ISC-202: Anti: no GitHub release or remote creation by Claude (user action)
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -477,3 +496,10 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - **Docker not built locally** — `docker` is not installed on this WSL host. Dockerfile is syntactically sound and matches the standard Bun + Next two-stage pattern; the user must run `docker build -t strand .` once from a host with Docker before tagging `v0.1.0`. Captured as a follow-up action item rather than a code change.
 - **`output: 'standalone'` deferred** — Advisor flagged this as the #1 Dockerfile-syntactically-sound-but-runtime-broken trap, but the current pattern uses `bun run start` (=`next start`) against the regular `.next` build, which works without standalone. The standalone output would shrink the runtime image (no devDeps in node_modules) but is an optimisation, not a correctness fix. Filed for post-v0.1.0.
 - **v0.1.0 tag is a user action.** No git remote is configured. The tag + push + GitHub release stay manual, with the package.json version bump to `0.1.0` happening at that point. Captured in W7 Decisions so future-Claude doesn't try to push on its own.
+
+- 2026-05-14 W8a: docker.io installed in WSL via apt; passwordless sudo absent so install hand-off was done by user in a real terminal. CLI v29.1.3, daemon up, user added to docker group + socket chmod 666 as session fallback.
+- 2026-05-14 W8a: legacy-builder DNS quirk on first `docker build` — `FROM oven/bun:1.3-alpine` failed to resolve via WSL NAT gateway. Workaround: `docker pull oven/bun:1.3-alpine` standalone (succeeded), then re-ran build with cached base. Follow-up: install buildx (modern BuildKit) to avoid the legacy-builder deprecation + DNS path.
+- 2026-05-14 W8a: refined: W7 ISA claimed Dockerfile was "syntactically sound" but it had a real bug — Step 15 copied a `public/` directory that never existed in the project. Fixed by creating `public/.gitkeep` (commit 72e3957). Lesson: "syntactically sound without running it" is the same as "untested."
+- 2026-05-14 W8a: refined: README + `src/app/page.tsx` had three drift strings ("v0.1.0-pre", "W7 🚧 In flight", "Private until v0.1.0") that became false at tag time. Fixed in commit 5e6c272 before tag.
+- 2026-05-14 W8a: Advisor (commitment-boundary, Rule 2) consulted before tag creation. Surfaced CHANGELOG.md absence and version-string drift; user chose Minimal prep path — embedded rich release notes directly in the annotated tag message instead of CHANGELOG.md. Other Advisor items (BuildKit, base-image digest pinning, OCI labels, signed tag) parked as post-v0.1.0 follow-ups in the tag annotation itself.
+- 2026-05-14 W8a: tag `v0.1.0` created locally on commit `5e6c272`. Push + GitHub remote setup + private→public flip + GitHub release remain user actions per the established convention.
