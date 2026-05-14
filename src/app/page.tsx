@@ -94,7 +94,7 @@ export default function HomePage() {
       <footer className="mt-16 border-t border-border pt-6 text-xs text-muted-foreground">
         <p>
           Built with Next.js · Bun · SQLite · Drizzle · Tailwind · Cytoscape.
-          Private until v0.1.0.
+          v0.1.0.
         </p>
       </footer>
     </main>

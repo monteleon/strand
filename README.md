@@ -7,8 +7,7 @@ network — who you know at X, who has worked with whom, who is closest to
 person Y, what your network looks like as a graph — without anything leaving
 your machine.
 
-**Status:** v0.1.0-pre — every feature week (W1–W6) shipped; W7 is the
-release polish in flight. **License:** MIT.
+**Status:** v0.1.0 — every feature week (W1–W7) shipped. **License:** MIT.
 
 ![Network graph view](docs/screenshots/06-graph.png)
 
@@ -200,7 +199,7 @@ not a rewrite.
 | W4 | Derive | ✅ Shipped — shared-employer detection, 3-kind taxonomy, confidence buckets. |
 | W5 | Query | ✅ Shipped — `/queries/at-company`, `worked-with`, `by-year`, `reach` + saved bookmarks. |
 | W6 | Visualise | ✅ Shipped — Cytoscape force-directed graph at `/graph`. |
-| W7 | Polish & ship | 🚧 In flight — README, screenshots, Docker, CONTRIBUTING, v0.1.0. |
+| W7 | Polish & ship | ✅ Shipped — README, screenshots, Docker, CONTRIBUTING, v0.1.0. |
 
 ## Privacy posture
 
