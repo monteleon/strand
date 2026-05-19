@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import cytoscape from "cytoscape";
+import { motion } from "framer-motion";
 import type { GraphEdge, GraphNode } from "@/lib/queries/graph";
 
 // Token literals — Cytoscape config strings can't read CSS variables. Source
@@ -141,11 +142,25 @@ export function HeroGraph({
     };
   }, [nodes, edges]);
 
+  // Slow continuous drift on the rendered canvas — pan + subtle scale,
+  // 60-second loop. Reads as "alive" without re-running cose or fighting
+  // Cytoscape's internal state. Reduced-motion users get a static graph.
   return (
-    <div
-      ref={containerRef}
+    <motion.div
       aria-hidden="true"
-      className="absolute inset-0 h-full w-full opacity-60"
-    />
+      className="absolute inset-0 h-full w-full opacity-60 motion-reduce:transform-none"
+      animate={{
+        x: [0, 12, -10, 6, 0],
+        y: [0, -8, 10, -4, 0],
+        scale: [1, 1.02, 1, 1.03, 1],
+      }}
+      transition={{
+        duration: 60,
+        repeat: Infinity,
+        ease: "easeInOut",
+      }}
+    >
+      <div ref={containerRef} className="h-full w-full" />
+    </motion.div>
   );
 }

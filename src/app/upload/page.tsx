@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
 type Counts = {
@@ -114,7 +115,7 @@ export default function UploadPage() {
         </header>
 
         <section className="mt-8">
-          <div
+          <motion.div
             data-testid="upload-dropzone"
             onDragOver={(e) => {
               e.preventDefault();
@@ -122,12 +123,26 @@ export default function UploadPage() {
             }}
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
+            animate={
+              dragging || busy
+                ? { borderColor: "hsl(var(--accent-signal))" }
+                : {
+                    borderColor: [
+                      "hsl(var(--border-subtle))",
+                      "hsl(var(--border-strong))",
+                      "hsl(var(--border-subtle))",
+                    ],
+                  }
+            }
+            transition={
+              dragging || busy
+                ? { duration: 0.18, ease: [0.33, 1, 0.68, 1] }
+                : { duration: 3.2, repeat: Infinity, ease: "easeInOut" }
+            }
             className={cn(
-              "flex flex-col items-center justify-center rounded-md border-2 border-dashed px-8 py-16 text-center transition-colors duration-base ease-cubic-out",
-              dragging
-                ? "border-accent-signal bg-accent-signal/5"
-                : "border-border-subtle bg-surface",
-              busy && "pointer-events-none opacity-60",
+              "flex flex-col items-center justify-center rounded-md border-2 border-dashed px-8 py-16 text-center",
+              dragging ? "bg-accent-signal/5" : "bg-surface",
+              busy && "pointer-events-none",
             )}
           >
             <p className="font-display text-lg font-medium text-text-primary">
@@ -147,11 +162,14 @@ export default function UploadPage() {
               </label>
             </p>
             {busy && (
-              <p className="mt-6 font-mono text-sm text-text-secondary">
-                Ingesting {result.filename}…
-              </p>
+              <div className="mt-6 flex items-center justify-center gap-3">
+                <Spinner />
+                <p className="font-mono text-sm text-text-secondary">
+                  Ingesting {result.filename}…
+                </p>
+              </div>
             )}
-          </div>
+          </motion.div>
 
           {result.kind === "success" && (
             <ResultPanel
@@ -207,8 +225,11 @@ function ResultPanel({
   counts: Counts;
 }) {
   return (
-    <div
+    <motion.div
       data-testid={`result-${tone}`}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.22, ease: [0.33, 1, 0.68, 1] }}
       className={cn(
         "mt-6 rounded-md border px-4 py-4",
         tone === "success"
@@ -218,25 +239,69 @@ function ResultPanel({
     >
       <p className="font-medium text-text-primary">{heading}</p>
       <p className="mt-1 font-mono text-xs text-text-tertiary">{note}</p>
-      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+      <motion.dl
+        className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4"
+        initial="hidden"
+        animate="show"
+        variants={{
+          show: { transition: { staggerChildren: 0.08, delayChildren: 0.12 } },
+        }}
+      >
         <CountItem label="People" value={counts.people} />
         <CountItem label="Connections" value={counts.connections} />
         <CountItem label="Companies" value={counts.companies} />
         <CountItem label="Positions" value={counts.positions} />
-      </dl>
-    </div>
+      </motion.dl>
+    </motion.div>
   );
 }
 
 function CountItem({ label, value }: { label: string; value: number }) {
   return (
-    <div>
+    <motion.div
+      variants={{
+        hidden: { opacity: 0, y: 6 },
+        show: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.33, 1, 0.68, 1] } },
+      }}
+    >
       <dt className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary">
         {label}
       </dt>
       <dd className="mt-1 font-mono text-lg font-medium text-text-primary">
         {value.toLocaleString()}
       </dd>
-    </div>
+    </motion.div>
+  );
+}
+
+function Spinner() {
+  return (
+    <motion.svg
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      aria-hidden="true"
+      animate={{ rotate: 360 }}
+      transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
+    >
+      <circle
+        cx="10"
+        cy="10"
+        r="8"
+        fill="none"
+        stroke="hsl(var(--border-subtle))"
+        strokeWidth="2"
+      />
+      <circle
+        cx="10"
+        cy="10"
+        r="8"
+        fill="none"
+        stroke="hsl(var(--accent-signal))"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray="12 38"
+      />
+    </motion.svg>
   );
 }
