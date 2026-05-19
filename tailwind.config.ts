@@ -5,13 +5,6 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        muted: "hsl(var(--muted))",
-        "muted-foreground": "hsl(var(--muted-foreground))",
-        accent: "hsl(var(--accent))",
-        border: "hsl(var(--border))",
-
         canvas: "hsl(var(--bg-canvas))",
         surface: "hsl(var(--bg-surface))",
         overlay: "hsl(var(--bg-overlay))",

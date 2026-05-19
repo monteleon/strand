@@ -1,12 +1,9 @@
 # Strand design tokens
 
-This file is the vocabulary for the **Graph-Forward Dark** design direction
-landing in v0.2.0. The tokens defined here are **additive** — the v0.1.x
-tokens (`--background`, `--foreground`, `--muted`, `--accent`, `--border`,
-plus `muted-foreground`) remain in place and every shipped component still
-references them. The new tokens have **no consumers yet**. Routes will
-migrate one at a time; until a route migrates, it keeps rendering on the
-old palette.
+This file is the vocabulary for **Graph-Forward Dark** — the design system
+adopted in v0.2.0. Every route in Strand renders on these tokens; the v0.1.x
+light palette has been fully retired (no consumers, no legacy CSS vars, no
+`prefers-color-scheme` block).
 
 ## Philosophy
 
@@ -69,20 +66,6 @@ Elevation comes from layer shift, not shadows.
 
 One token, one meaning. `accent-signal` never decorates a button just
 because; `accent-warmth` never appears on anything that isn't the owner.
-
-### Legacy tokens (v0.1.x — still in use)
-
-| Token | CSS var | Status |
-| --- | --- | --- |
-| `background` | `--background` | Unchanged — used by every shipped component |
-| `foreground` | `--foreground` | Unchanged |
-| `muted` | `--muted` | Unchanged |
-| `muted-foreground` | `--muted-foreground` | Unchanged |
-| `accent` | `--accent` | Unchanged — the v0.1.x orange |
-| `border` | `--border` | Unchanged |
-
-These will be deprecated as routes migrate to the new vocabulary, but the
-deprecation does not happen in this commit.
 
 ---
 
@@ -180,28 +163,9 @@ Exits use the entrance easing reversed — never a separate "exit" curve.
 
 - **Prefer named tokens to raw values.** `bg-canvas` over `bg-[#0B0D10]`,
   `duration-base` over `duration-200`.
-- **Don't mix legacy and new on the same surface.** A route either renders
-  on the v0.1.x palette or the new palette, never half-and-half.
 - **Accent restraint.** A page with more than one or two `accent-signal`
   elements visible at once is probably misusing it. Reserve it for
   high-confidence / interactive-focus / you.
 - **Mono for numbers.** Any rendered number that is data (count, year,
   confidence, ID, percentage) uses `font-mono`. Numbers that are part of
   prose (the word "two" in a sentence) do not.
-
----
-
-## Migration plan (informational — not part of this commit)
-
-1. **This commit** — vocabulary lands, no consumers yet, no visible change.
-2. **Tokens follow-up** — load Inter Display + JetBrains Mono via
-   `next/font/local`; wire `--font-display`, `--font-sans`, `--font-mono`
-   to the actual font CSS variables.
-3. **`/graph` reference route** — first full migration to the new
-   vocabulary; new shell, dark theme, right inspector, motion system.
-4. **One route per session** — `/people`, `/companies`, `/queries/*`,
-   `/profile`, `/upload`, home — each gets its own commit.
-5. **Deprecate v0.1.x tokens** — once every consumer has moved, remove
-   `--background`/`--foreground`/etc. and the `prefers-color-scheme` block.
-
-Until step 5, both vocabularies coexist.
