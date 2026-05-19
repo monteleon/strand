@@ -105,7 +105,13 @@ export function LeftRail() {
         })}
       </ul>
 
-      <div className="border-t border-border-subtle px-4 py-3">
+      <div className="border-t border-border-subtle px-4 py-3 space-y-2">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-text-tertiary opacity-0 transition-opacity duration-base ease-cubic-out group-hover/rail:opacity-100 group-focus-within/rail:opacity-100">
+          <kbd className="rounded-sm border border-border-subtle bg-overlay px-1.5 py-0.5 normal-case tracking-normal text-text-secondary">
+            ⌘K
+          </kbd>
+          <span>search</span>
+        </div>
         <p className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary opacity-0 transition-opacity duration-base ease-cubic-out group-hover/rail:opacity-100 group-focus-within/rail:opacity-100">
           v0.2.0 — alpha
         </p>

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { LeftRail } from "@/components/left-rail";
+import { CommandPalette } from "@/components/command-palette";
 import "./globals.css";
 
 const inter = Inter({
@@ -31,6 +32,7 @@ export default function RootLayout({
       <body className="flex min-h-screen">
         <LeftRail />
         <main className="min-w-0 flex-1">{children}</main>
+        <CommandPalette />
       </body>
     </html>
   );
