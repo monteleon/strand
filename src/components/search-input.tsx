@@ -21,19 +21,19 @@ export function SearchInput({
         name="q"
         defaultValue={q}
         placeholder={placeholder}
-        className="flex-1 rounded-sm border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+        className="flex-1 rounded-sm border border-border-subtle bg-overlay px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary transition-colors duration-fast ease-cubic-out focus:border-accent-signal focus:outline-none"
         autoComplete="off"
       />
       <button
         type="submit"
-        className="rounded-sm border border-border px-3 py-2 text-sm hover:bg-muted/40"
+        className="rounded-sm border border-border-subtle bg-overlay px-3 py-2 text-sm text-text-primary transition-colors duration-fast ease-cubic-out hover:border-border-strong hover:bg-surface"
       >
         Search
       </button>
       {q && (
         <a
           href={basePath}
-          className="text-xs text-muted-foreground underline underline-offset-4"
+          className="font-mono text-xs text-text-secondary underline decoration-text-tertiary underline-offset-4 transition-colors duration-fast ease-cubic-out hover:text-accent-signal hover:decoration-accent-signal"
         >
           clear
         </a>

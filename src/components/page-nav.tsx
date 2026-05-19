@@ -30,8 +30,9 @@ export function PageNav({ basePath, page, totalPages, q, hasPrev, hasNext }: Pro
         href={buildHref(basePath, page - 1, q)}
         label="← Previous"
       />
-      <span className="text-muted-foreground">
-        Page {page} of {totalPages}
+      <span className="font-mono text-xs text-text-secondary">
+        Page <span className="text-text-primary">{page}</span> of{" "}
+        <span className="text-text-primary">{totalPages}</span>
       </span>
       <PageLink
         disabled={!hasNext}
@@ -45,14 +46,16 @@ export function PageNav({ basePath, page, totalPages, q, hasPrev, hasNext }: Pro
 function PageLink({ disabled, href, label }: { disabled: boolean; href: string; label: string }) {
   if (disabled) {
     return (
-      <span className="cursor-default text-muted-foreground/50">{label}</span>
+      <span className="cursor-default font-mono text-xs text-text-tertiary">
+        {label}
+      </span>
     );
   }
   return (
     <Link
       href={href}
       className={cn(
-        "rounded-sm border border-border px-3 py-1.5 hover:bg-muted/40 transition",
+        "rounded-sm border border-border-subtle bg-overlay px-3 py-1.5 font-mono text-xs text-text-primary transition-colors duration-fast ease-cubic-out hover:border-accent-signal hover:text-accent-signal",
       )}
     >
       {label}
