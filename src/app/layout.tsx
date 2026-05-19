@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
-import Link from "next/link";
+import { LeftRail } from "@/components/left-rail";
 import "./globals.css";
 
 const inter = Inter({
@@ -28,19 +28,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
-      <body>
-        <header className="border-b border-border bg-background">
-          <div className="mx-auto flex max-w-6xl items-center px-6 py-3">
-            <Link
-              href="/"
-              className="text-base font-semibold tracking-tight text-foreground transition-colors hover:text-accent"
-              aria-label="Strand — home"
-            >
-              Strand
-            </Link>
-          </div>
-        </header>
-        {children}
+      <body className="flex min-h-screen">
+        <LeftRail />
+        <main className="min-w-0 flex-1">{children}</main>
       </body>
     </html>
   );
