@@ -25,7 +25,7 @@
     --accent-signal: 199 95% 74%;
     --accent-warmth: 35  88% 69%;
 
-    --font-display: ui-sans-serif;
+    --font-display: var(--font-sans);
     --font-sans:    ui-sans-serif;
     --font-mono:    ui-monospace;
 
