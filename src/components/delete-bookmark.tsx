@@ -27,7 +27,7 @@ export function DeleteBookmark({ id, name }: { id: string; name: string }) {
       disabled={busy}
       aria-label={`Delete bookmark ${name}`}
       data-testid="delete-bookmark"
-      className="ml-2 rounded-sm border border-border px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted/40 disabled:opacity-50"
+      className="ml-2 rounded-sm border border-border-subtle bg-overlay px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-text-tertiary transition-colors duration-fast ease-cubic-out hover:border-border-strong hover:text-text-primary disabled:opacity-50"
     >
       {busy ? "…" : "Delete"}
     </button>

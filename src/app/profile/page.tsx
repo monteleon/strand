@@ -27,7 +27,11 @@ async function loadOwner() {
     .select()
     .from(schema.positions)
     .where(declaredWhere);
-  return { owner, positionCount, currentPositions: currentPositions.filter((p) => p.current) };
+  return {
+    owner,
+    positionCount,
+    currentPositions: currentPositions.filter((p) => p.current),
+  };
 }
 
 export default async function ProfilePage() {
@@ -35,65 +39,95 @@ export default async function ProfilePage() {
 
   if (!data) {
     return (
-      <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-        <header className="border-b border-border pb-8">
-          <h1 className="text-3xl font-semibold tracking-tight">Profile</h1>
-        </header>
-        <p data-testid="empty-profile" className="mt-8 text-sm text-muted-foreground">
-          No profile ingested yet. Drop your LinkedIn export at{" "}
-          <a className="underline underline-offset-4" href="/upload">
-            /upload
-          </a>{" "}
-          to populate your profile.
-        </p>
-      </main>
+      <div className="min-h-screen bg-canvas text-text-primary">
+        <div className="mx-auto max-w-3xl px-8 py-12">
+          <header className="border-b border-border-subtle pb-6">
+            <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+              Profile
+            </p>
+            <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">
+              You
+            </h1>
+          </header>
+          <p
+            data-testid="empty-profile"
+            className="mt-6 text-sm text-text-secondary"
+          >
+            No profile ingested yet. Drop your LinkedIn export at{" "}
+            <a
+              className="text-accent-signal underline decoration-accent-signal/40 underline-offset-4 transition-colors duration-fast ease-cubic-out hover:decoration-accent-signal"
+              href="/upload"
+            >
+              /upload
+            </a>{" "}
+            to populate your profile.
+          </p>
+        </div>
+      </div>
     );
   }
 
   const { owner, positionCount, currentPositions } = data;
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-      <header className="border-b border-border pb-8">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">
-          Owner
-        </p>
-        <h1
-          data-testid="profile-name"
-          className="mt-2 text-3xl font-semibold tracking-tight"
-        >
-          {owner.fullName}
-        </h1>
-        {owner.headline && (
-          <p data-testid="profile-headline" className="mt-3 text-base text-muted-foreground">
-            {owner.headline}
+    <div className="min-h-screen bg-canvas text-text-primary">
+      <div className="mx-auto max-w-3xl px-8 py-12">
+        <header className="border-b border-border-subtle pb-6">
+          <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+            Owner
           </p>
-        )}
-      </header>
+          <div className="mt-1 flex items-baseline gap-3">
+            <h1
+              data-testid="profile-name"
+              className="font-display text-3xl font-semibold tracking-tight"
+            >
+              {owner.fullName}
+            </h1>
+            <span className="font-mono text-[10px] uppercase tracking-wider text-accent-warmth">
+              · you
+            </span>
+          </div>
+          {owner.headline && (
+            <p
+              data-testid="profile-headline"
+              className="mt-3 text-base text-text-secondary"
+            >
+              {owner.headline}
+            </p>
+          )}
+        </header>
 
-      <section className="mt-10">
-        <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
-          Positions
-        </h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          {positionCount} total · {currentPositions.length} currently active
-        </p>
-        {currentPositions.length > 0 && (
-          <ul className="mt-4 space-y-2 text-sm">
-            {currentPositions.map((p) => (
-              <li
-                key={p.id}
-                className="rounded-md border border-border bg-muted/10 px-4 py-3"
-              >
-                <p className="font-medium">{p.title ?? "(no title)"}</p>
-                <p className="text-xs text-muted-foreground">
-                  since {p.startDate ?? "(unknown)"}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </main>
+        <section className="mt-8">
+          <h2 className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+            Positions
+          </h2>
+          <p className="mt-2 text-sm text-text-secondary">
+            <span className="font-mono text-text-primary">{positionCount}</span>{" "}
+            total ·{" "}
+            <span className="font-mono text-text-primary">
+              {currentPositions.length}
+            </span>{" "}
+            currently active
+          </p>
+          {currentPositions.length > 0 && (
+            <ul className="mt-3 space-y-2 text-sm">
+              {currentPositions.map((p) => (
+                <li
+                  key={p.id}
+                  className="rounded-md border border-border-subtle bg-surface px-4 py-3"
+                >
+                  <p className="font-medium text-text-primary">
+                    {p.title ?? "(no title)"}
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs text-text-tertiary">
+                    since {p.startDate ?? "(unknown)"}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </div>
   );
 }

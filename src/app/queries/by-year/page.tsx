@@ -23,143 +23,155 @@ export default async function ByYearPage({
   const buckets = await listConnectionYears();
   const bookmarks = await listSavedQueries();
 
-  // No year selected: render the histogram.
   if (!yearParam) {
     const total = buckets.reduce((sum, b) => sum + b.count, 0);
     const max = Math.max(1, ...buckets.map((b) => b.count));
     return (
-      <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-        <header className="border-b border-border pb-8">
-          <p className="text-xs uppercase tracking-wider text-muted-foreground">
-            Queries
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-            Connections by year
-          </h1>
-          <p className="mt-3 text-sm text-muted-foreground">
-            {total.toLocaleString()} connections across {buckets.length}{" "}
-            {buckets.length === 1 ? "bucket" : "buckets"}. Click a year to
-            see who you connected with in that cohort.
-          </p>
-        </header>
-
-        <section className="mt-8" data-testid="by-year-histogram">
-          {buckets.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No connections in this tenant.
+      <div className="min-h-screen bg-canvas text-text-primary">
+        <div className="mx-auto max-w-3xl px-8 py-12">
+          <header className="border-b border-border-subtle pb-6">
+            <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+              Queries
             </p>
-          ) : (
-            <ul className="divide-y divide-border rounded-md border border-border">
-              {buckets.map((b) => {
-                const width = Math.max(2, Math.round((b.count / max) * 100));
-                return (
-                  <li
-                    key={b.year}
-                    data-testid="by-year-bucket"
-                    className="px-4 py-3 text-sm"
-                  >
-                    <Link
-                      href={`/queries/by-year?year=${encodeURIComponent(b.year)}`}
-                      className="block -mx-4 rounded px-4 py-1 hover:bg-muted/40"
-                    >
-                      <div className="flex items-baseline justify-between gap-3">
-                        <span className="font-medium">
-                          {b.year === "unknown" ? "Unknown year" : b.year}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {b.count.toLocaleString()}{" "}
-                          {b.count === 1 ? "person" : "people"}
-                        </span>
-                      </div>
-                      <div
-                        className="mt-2 h-1.5 rounded-sm bg-foreground/15"
-                        style={{ width: `${width}%` }}
-                        aria-hidden
-                      />
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
+            <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">
+              Connections by year
+            </h1>
+            <p className="mt-3 text-sm text-text-secondary">
+              <span className="font-mono">{total.toLocaleString()}</span>{" "}
+              connections across{" "}
+              <span className="font-mono">{buckets.length}</span>{" "}
+              {buckets.length === 1 ? "bucket" : "buckets"}. Click a year to
+              see who you connected with in that cohort.
+            </p>
+          </header>
 
-        <SavedQueriesSidebar bookmarks={bookmarks} />
-      </main>
+          <section className="mt-6" data-testid="by-year-histogram">
+            {buckets.length === 0 ? (
+              <p className="text-sm text-text-secondary">
+                No connections in this tenant.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface">
+                {buckets.map((b) => {
+                  const width = Math.max(
+                    2,
+                    Math.round((b.count / max) * 100),
+                  );
+                  return (
+                    <li
+                      key={b.year}
+                      data-testid="by-year-bucket"
+                      className="text-sm"
+                    >
+                      <Link
+                        href={`/queries/by-year?year=${encodeURIComponent(b.year)}`}
+                        className="block px-4 py-2.5 transition-colors duration-fast ease-cubic-out hover:bg-overlay"
+                      >
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="font-medium text-text-primary">
+                            {b.year === "unknown" ? "Unknown year" : b.year}
+                          </span>
+                          <span className="font-mono text-xs text-text-secondary">
+                            {b.count.toLocaleString()}{" "}
+                            {b.count === 1 ? "person" : "people"}
+                          </span>
+                        </div>
+                        <div
+                          className="mt-2 h-1.5 rounded-sm bg-accent-signal/30"
+                          style={{ width: `${width}%` }}
+                          aria-hidden
+                        />
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          <SavedQueriesSidebar bookmarks={bookmarks} />
+        </div>
+      </div>
     );
   }
 
-  // Year selected: drilldown.
   const rows = await listPeopleByYear(yearParam);
   const url = `/queries/by-year?year=${encodeURIComponent(yearParam)}`;
   const label = yearParam === "unknown" ? "Unknown year" : yearParam;
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-      <header className="border-b border-border pb-8">
-        <p className="text-xs uppercase tracking-wider text-muted-foreground">
-          <Link href="/queries/by-year" className="hover:underline">
-            Queries · Connections by year
-          </Link>
-        </p>
-        <h1
-          data-testid="by-year-name"
-          className="mt-2 text-3xl font-semibold tracking-tight"
-        >
-          {label}
-        </h1>
-        <p className="mt-3 text-sm text-muted-foreground">
-          {rows.length.toLocaleString()}{" "}
-          {rows.length === 1 ? "person" : "people"} connected in this cohort.
-        </p>
-      </header>
-
-      <section className="mt-8">
-        {rows.length === 0 ? (
-          <p
-            data-testid="by-year-empty"
-            className="text-sm text-muted-foreground"
-          >
-            No people connected this year.
+    <div className="min-h-screen bg-canvas text-text-primary">
+      <div className="mx-auto max-w-3xl px-8 py-12">
+        <header className="border-b border-border-subtle pb-6">
+          <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+            <Link
+              href="/queries/by-year"
+              className="transition-colors duration-fast ease-cubic-out hover:text-accent-signal"
+            >
+              Queries · Connections by year
+            </Link>
           </p>
-        ) : (
-          <ul
-            data-testid="by-year-list"
-            className="divide-y divide-border rounded-md border border-border"
+          <h1
+            data-testid="by-year-name"
+            className="mt-1 font-display text-3xl font-semibold tracking-tight"
           >
-            {rows.map((r) => (
-              <li
-                key={r.id}
-                data-testid="by-year-row"
-                className="px-4 py-3 text-sm"
-              >
-                <Link
-                  href={`/people/${r.id}`}
-                  className="block -mx-4 rounded px-4 py-1 hover:bg-muted/40"
+            {label}
+          </h1>
+          <p className="mt-3 text-sm text-text-secondary">
+            <span className="font-mono">{rows.length.toLocaleString()}</span>{" "}
+            {rows.length === 1 ? "person" : "people"} connected in this cohort.
+          </p>
+        </header>
+
+        <section className="mt-6">
+          {rows.length === 0 ? (
+            <p
+              data-testid="by-year-empty"
+              className="text-sm text-text-secondary"
+            >
+              No people connected this year.
+            </p>
+          ) : (
+            <ul
+              data-testid="by-year-list"
+              className="divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface"
+            >
+              {rows.map((r) => (
+                <li
+                  key={r.id}
+                  data-testid="by-year-row"
+                  className="text-sm"
                 >
-                  <p className="font-medium">{r.fullName}</p>
-                  {r.headline && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {r.headline}
+                  <Link
+                    href={`/people/${r.id}`}
+                    className="block px-4 py-2.5 transition-colors duration-fast ease-cubic-out hover:bg-overlay"
+                  >
+                    <p className="font-medium text-text-primary">
+                      {r.fullName}
                     </p>
-                  )}
-                  {r.connectedAt && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      connected {r.connectedAt}
-                    </p>
-                  )}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+                    {r.headline && (
+                      <p className="mt-0.5 text-xs text-text-secondary">
+                        {r.headline}
+                      </p>
+                    )}
+                    {r.connectedAt && (
+                      <p className="mt-0.5 font-mono text-[10px] text-text-tertiary">
+                        connected {r.connectedAt}
+                      </p>
+                    )}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <section className="mt-8">
-        <SaveBookmark url={url} />
-      </section>
+        <section className="mt-6">
+          <SaveBookmark url={url} />
+        </section>
 
-      <SavedQueriesSidebar bookmarks={bookmarks} />
-    </main>
+        <SavedQueriesSidebar bookmarks={bookmarks} />
+      </div>
+    </div>
   );
 }

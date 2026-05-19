@@ -98,95 +98,100 @@ export default function UploadPage() {
   const busy = result.kind === "uploading";
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
-      <header className="border-b border-border pb-8">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Import LinkedIn export
-        </h1>
-        <p className="mt-3 text-base text-muted-foreground">
-          Drop your LinkedIn data export .zip below. Nothing leaves this
-          machine.
-        </p>
-      </header>
-
-      <section className="mt-10">
-        <div
-          data-testid="upload-dropzone"
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          className={cn(
-            "flex flex-col items-center justify-center rounded-md border-2 border-dashed px-8 py-16 text-center transition",
-            dragging
-              ? "border-foreground bg-muted/40"
-              : "border-border bg-muted/10",
-            busy && "opacity-60 pointer-events-none",
-          )}
-        >
-          <p className="text-base font-medium">
-            Drop your LinkedIn .zip here
+    <div className="min-h-screen bg-canvas text-text-primary">
+      <div className="mx-auto max-w-3xl px-8 py-12">
+        <header className="border-b border-border-subtle pb-6">
+          <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+            Upload
           </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Or pick a file:{" "}
-            <label className="cursor-pointer font-medium text-foreground underline underline-offset-4">
-              browse
-              <input
-                type="file"
-                accept=".zip,application/zip"
-                onChange={onFileChange}
-                className="sr-only"
-                disabled={busy}
-              />
-            </label>
+          <h1 className="mt-1 font-display text-3xl font-semibold tracking-tight">
+            Import LinkedIn export
+          </h1>
+          <p className="mt-3 text-base text-text-secondary">
+            Drop your LinkedIn data export .zip below. Nothing leaves this
+            machine.
           </p>
-          {busy && (
-            <p className="mt-6 text-sm text-muted-foreground">
-              Ingesting {result.filename}…
-            </p>
-          )}
-        </div>
+        </header>
 
-        {result.kind === "success" && (
-          <ResultPanel
-            heading={`Imported ${result.filename}`}
-            tone="success"
-            note={`batch ${result.batchId.slice(0, 8)}…`}
-            counts={result.counts}
-          />
-        )}
-
-        {result.kind === "duplicate" && (
-          <ResultPanel
-            heading={`Already imported (${result.filename})`}
-            tone="info"
-            note={`existing batch ${result.existingBatchId.slice(0, 8)}…`}
-            counts={result.counts}
-          />
-        )}
-
-        {result.kind === "error" && (
+        <section className="mt-8">
           <div
-            role="alert"
-            className="mt-8 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm"
+            data-testid="upload-dropzone"
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            className={cn(
+              "flex flex-col items-center justify-center rounded-md border-2 border-dashed px-8 py-16 text-center transition-colors duration-base ease-cubic-out",
+              dragging
+                ? "border-accent-signal bg-accent-signal/5"
+                : "border-border-subtle bg-surface",
+              busy && "pointer-events-none opacity-60",
+            )}
           >
-            <p className="font-medium text-destructive">
-              Import failed: {result.filename}
+            <p className="font-display text-lg font-medium text-text-primary">
+              Drop your LinkedIn .zip here
             </p>
-            <p className="mt-1 text-muted-foreground">{result.message}</p>
+            <p className="mt-2 text-sm text-text-secondary">
+              Or pick a file:{" "}
+              <label className="cursor-pointer font-medium text-accent-signal underline decoration-accent-signal/40 underline-offset-4 transition-colors duration-fast ease-cubic-out hover:decoration-accent-signal">
+                browse
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={onFileChange}
+                  className="sr-only"
+                  disabled={busy}
+                />
+              </label>
+            </p>
+            {busy && (
+              <p className="mt-6 font-mono text-sm text-text-secondary">
+                Ingesting {result.filename}…
+              </p>
+            )}
           </div>
-        )}
-      </section>
 
-      <footer className="mt-16 border-t border-border pt-6 text-xs text-muted-foreground">
-        <p>
-          Re-uploading the same export is a no-op — Strand recognises identical
-          files by their SHA-256.
-        </p>
-      </footer>
-    </main>
+          {result.kind === "success" && (
+            <ResultPanel
+              heading={`Imported ${result.filename}`}
+              tone="success"
+              note={`batch ${result.batchId.slice(0, 8)}…`}
+              counts={result.counts}
+            />
+          )}
+
+          {result.kind === "duplicate" && (
+            <ResultPanel
+              heading={`Already imported (${result.filename})`}
+              tone="info"
+              note={`existing batch ${result.existingBatchId.slice(0, 8)}…`}
+              counts={result.counts}
+            />
+          )}
+
+          {result.kind === "error" && (
+            <div
+              role="alert"
+              className="mt-6 rounded-md border border-accent-warmth/40 bg-accent-warmth/5 px-4 py-3 text-sm"
+            >
+              <p className="font-medium text-accent-warmth">
+                Import failed: {result.filename}
+              </p>
+              <p className="mt-1 text-text-secondary">{result.message}</p>
+            </div>
+          )}
+        </section>
+
+        <footer className="mt-10 border-t border-border-subtle pt-4">
+          <p className="font-mono text-xs text-text-tertiary">
+            Re-uploading the same export is a no-op — Strand recognises
+            identical files by their SHA-256.
+          </p>
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -205,14 +210,14 @@ function ResultPanel({
     <div
       data-testid={`result-${tone}`}
       className={cn(
-        "mt-8 rounded-md border px-4 py-4",
+        "mt-6 rounded-md border px-4 py-4",
         tone === "success"
-          ? "border-emerald-500/40 bg-emerald-500/5"
-          : "border-muted-foreground/30 bg-muted/30",
+          ? "border-accent-signal/40 bg-accent-signal/5"
+          : "border-border-subtle bg-surface",
       )}
     >
-      <p className="text-sm font-medium">{heading}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+      <p className="font-medium text-text-primary">{heading}</p>
+      <p className="mt-1 font-mono text-xs text-text-tertiary">{note}</p>
       <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
         <CountItem label="People" value={counts.people} />
         <CountItem label="Connections" value={counts.connections} />
@@ -226,10 +231,10 @@ function ResultPanel({
 function CountItem({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <dt className="text-xs uppercase tracking-wider text-muted-foreground">
+      <dt className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary">
         {label}
       </dt>
-      <dd className="mt-1 text-lg font-medium tabular-nums">
+      <dd className="mt-1 font-mono text-lg font-medium text-text-primary">
         {value.toLocaleString()}
       </dd>
     </div>

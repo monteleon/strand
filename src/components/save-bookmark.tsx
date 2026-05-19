@@ -3,9 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-// "Bookmark this query" client component. POSTs the current URL with a
-// user-prompted friendly name to /api/bookmarks. Refreshes the page so
-// the server-rendered Saved-Queries list picks the new entry up.
 export function SaveBookmark({ url }: { url: string }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -44,12 +41,15 @@ export function SaveBookmark({ url }: { url: string }) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted/40"
+          className="rounded-sm border border-border-subtle bg-overlay px-3 py-1.5 font-mono text-xs text-text-secondary transition-colors duration-fast ease-cubic-out hover:border-accent-signal hover:text-accent-signal"
         >
           Bookmark this query
         </button>
         {message && (
-          <p data-testid="bookmark-message" className="mt-2 text-xs text-muted-foreground">
+          <p
+            data-testid="bookmark-message"
+            className="mt-2 font-mono text-xs text-text-secondary"
+          >
             {message}
           </p>
         )}
@@ -64,7 +64,7 @@ export function SaveBookmark({ url }: { url: string }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Bookmark name…"
-        className="w-full rounded-sm border border-border bg-background px-3 py-2 text-sm focus:border-foreground focus:outline-none"
+        className="w-full rounded-sm border border-border-subtle bg-overlay px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary transition-colors duration-fast ease-cubic-out focus:border-accent-signal focus:outline-none"
         autoFocus
       />
       <div className="flex items-center gap-2">
@@ -73,7 +73,7 @@ export function SaveBookmark({ url }: { url: string }) {
           onClick={submit}
           disabled={submitting || !name.trim()}
           data-testid="confirm-save-bookmark"
-          className="rounded-sm border border-border bg-foreground px-3 py-1.5 text-xs font-medium text-background hover:opacity-90 disabled:opacity-50"
+          className="rounded-sm border border-accent-signal bg-accent-signal/15 px-3 py-1.5 text-xs font-medium text-accent-signal transition-colors duration-fast ease-cubic-out hover:bg-accent-signal/25 disabled:opacity-50"
         >
           {submitting ? "Saving…" : "Save"}
         </button>
@@ -83,13 +83,16 @@ export function SaveBookmark({ url }: { url: string }) {
             setOpen(false);
             setName("");
           }}
-          className="rounded-sm border border-border px-3 py-1.5 text-xs hover:bg-muted/40"
+          className="rounded-sm border border-border-subtle bg-overlay px-3 py-1.5 text-xs text-text-secondary transition-colors duration-fast ease-cubic-out hover:border-border-strong hover:text-text-primary"
         >
           Cancel
         </button>
       </div>
       {message && (
-        <p data-testid="bookmark-message" className="text-xs text-muted-foreground">
+        <p
+          data-testid="bookmark-message"
+          className="font-mono text-xs text-text-secondary"
+        >
           {message}
         </p>
       )}

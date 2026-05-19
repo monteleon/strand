@@ -5,10 +5,6 @@ import { useRouter } from "next/navigation";
 
 type Candidate = { id: string; fullName: string; headline: string | null };
 
-// Person picker reused on /queries/worked-with and /queries/reach.
-// Searches via /api/people/search and on click navigates to
-// `${basePath}/${id}`. No state on the server — the URL changes,
-// the destination page reads the [id] segment.
 export function PersonPicker({
   basePath,
   placeholder,
@@ -44,24 +40,26 @@ export function PersonPicker({
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-sm border border-border bg-background px-3 py-2 text-sm focus:border-foreground focus:outline-none"
+        className="w-full rounded-sm border border-border-subtle bg-overlay px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary transition-colors duration-fast ease-cubic-out focus:border-accent-signal focus:outline-none"
         autoComplete="off"
       />
       {candidates.length > 0 && (
         <ul
           data-testid="person-candidates"
-          className="absolute z-10 mt-1 w-full divide-y divide-border rounded-sm border border-border bg-background shadow"
+          className="absolute z-10 mt-1 w-full divide-y divide-border-subtle rounded-sm border border-border-subtle bg-overlay shadow-lg"
         >
           {candidates.map((c) => (
             <li key={c.id}>
               <button
                 type="button"
                 onClick={() => router.push(`${basePath}/${c.id}`)}
-                className="block w-full px-3 py-2 text-left text-sm hover:bg-muted/40"
+                className="block w-full px-3 py-2 text-left text-sm transition-colors duration-fast ease-cubic-out hover:bg-surface"
               >
-                <p className="font-medium">{c.fullName}</p>
+                <p className="font-medium text-text-primary">{c.fullName}</p>
                 {c.headline && (
-                  <p className="text-xs text-muted-foreground truncate">{c.headline}</p>
+                  <p className="truncate text-xs text-text-secondary">
+                    {c.headline}
+                  </p>
                 )}
               </button>
             </li>
