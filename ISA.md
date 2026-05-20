@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.2.0 — release; edge cap + verify-w6 refresh + v0.2.0 tag
-slug: v0.2.0-release
+current_task: v0.3.0-A — Messages.csv ingest (slice 1: parser + ingest path, data layer only)
+slug: v0.3.0-A-messages-ingest
 effort: E3
 phase: complete
-progress: 6/6
+progress: 16/16
 mode: ALGORITHM
 started: 2026-05-20
 updated: 2026-05-20
@@ -326,6 +326,25 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-225: `scripts/verify-w6.ts` reads stats via `data-stat` cells rather than regex-against-label; the edge cell parser accepts both `M` and `M / N` formats. Suite is **11/11 pass** at the v0.2.0 tag commit, including the post-rebuild prod-mode probe.
 - [x] ISC-226: Annotated tag `v0.2.0` created locally on the commit carrying ISC-221..225. Push + GitHub release remain user actions per the W7 convention.
 
+**v0.3.0-A — Messages.csv ingest (slice 1: data layer)** *(2026-05-20)*
+
+- [x] ISC-227: `parseLinkedInExport` reads `messages.csv` via existing `readZipFile(zip, "messages.csv")` and returns `LinkedInMessage[]` on `ParsedExport`. Optional in zip — Basic export ships zero, Complete ships ~2200 rows.
+- [x] ISC-228: Date parser handles LinkedIn's `"YYYY-MM-DD HH:MM:SS UTC"` format → epoch seconds; rows with unparseable dates are skipped (counted, not crashed). Real export: 0/2209 unparseable.
+- [x] ISC-229: Sender + recipient profile URL canonicalised via `.trim()` — same surface as `connections.linkedinUrl` extraction. Owner URL detected via FROM == profile.fullName match (`https://www.linkedin.com/in/matt-pwc-bi`).
+- [x] ISC-230: Group messages (comma-separated URLs inside the quoted `RECIPIENT PROFILE URLS` CSV cell) expanded into one record per (sender → recipient) pair. Real export: 2209 raw rows → 2228 expanded records.
+- [x] ISC-231: Record-level validity guard (per feedback memory 2026-05-13): drop messages where sender URL OR all recipient URLs are empty after canonicalisation. Real export: 108 rows skipped this gate.
+- [x] ISC-232: `ingestLinkedInExport.writeMessages` resolves URL → `people.id` via pre-fetched `Set<string>` of valid person IDs + `personIdFromUrl(tenantId, url)`. Single-pass O(messages); owner URL routes to `ownerPersonId(tenantId, fullName)`.
+- [x] ISC-233: Messages where either party's URL doesn't resolve to a `people` row are skipped (1st-degree-only invariant — InMail from non-connections, deleted accounts); `skipped_no_person` count reported in `IngestResult.messageStats`. Real export: 654 / 2228 expanded (29.4%) skipped this gate.
+- [x] ISC-234: `direction` set to `"sent"` when sender resolves to ownerPersonId, `"received"` otherwise; rows where fromId == toId post-resolution are dropped. Real export: 625 sent + 945 received = 1570 total.
+- [x] ISC-235: Deterministic message `id` = `sha1Hex(tenantId|msg|conversationId|sentAtEpoch|fromPersonId|toPersonId|contentHash)` → re-ingest of same export bytes hits `existingBatch` shortcut (returns `duplicate: true`, 0 new rows verified); re-ingest of overlapping different archive converges via `INSERT … ON CONFLICT DO NOTHING`. Refined: contentHash element added post-Advisor (2026-05-20) — see ISC-235.1.
+- [x] ISC-235.1 *(Advisor 2026-05-20, refined ID)*: `contentHash = sha1(CONTENT)[:8]` tiebreaks same-second same-pair messages (LinkedIn's DATE column has whole-second resolution; rapid-fire bursts can share `sentAtEpoch`). Unit test "ISC-235.1 (Advisor)" passes; real-data smoke `inserted` count went 1570 → **1573 (+3)** after the fix — empirical confirmation that three actual messages were being lost in Matt's export before the refinement.
+- [x] ISC-236: `IngestResult.messageStats` reports `{ parsed, expanded, skipped_no_url, skipped_no_date, skipped_no_person, inserted }`. Real ingest: `{parsed: 2209, expanded: 2228, skipped_no_url: 108, skipped_no_date: 0, skipped_no_person: 654, inserted: 1570}`.
+- [x] ISC-237: On the real Complete export (2209 raw rows, 2228 expanded), `inserted: 1570` ≥ 80% of (`parsed − skipped_no_person`) = `1555`. Actual: 1570/1555 = 101% (expansion can exceed raw because group rows fan out). PASSED.
+- [x] ISC-238: Anti — no rows with `fromPersonId == toPersonId`. `SELECT count(*) FROM messages WHERE from_person_id = to_person_id AND tenant_id = 'local'` → 0. Verified.
+- [x] ISC-239: Anti — multi-line CONTENT does not break row parsing. Unit test "multi-line CONTENT (quoted newline)" passes via existing `iterRows` RFC-4180 quote-state machine; real export shows 6245 file lines parse cleanly to 2209 records.
+- [x] ISC-240: Anti — `writeMessages` batches inserts via `db.insert(...).values(slice)` in chunks of 200, not per-row. Code inspection: `for (let i = 0; i < batch.length; i += CHUNK)` loop at `src/lib/linkedin/ingest.ts`.
+- [x] ISC-241: `parse.test.ts` has 8 new messages-related tests (1:1, group, no-recipient-URL skip, bad-date skip, self-DM drop, owner-URL detection, multi-line CONTENT, parseMessageDate unit). Suite 15/15 pass.
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -406,6 +425,8 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | nav-progress + loading skeletons *(v0.2.0-C)* | ISC-219..220 | graph-forward-dark | yes (with min-degree-filter) |
 | edge-cap *(v0.2.0-release)* | ISC-221..223 | graph-filters-server | no |
 | verify-w6-refresh *(v0.2.0-release)* | ISC-224..225 | edge-cap | no |
+| messages-parser *(v0.3.0-A)* | ISC-227..231, ISC-239, ISC-241 | (existing JSZip + parseCSV path) | yes (with messages-ingest if record types lock first) |
+| messages-ingest *(v0.3.0-A)* | ISC-232..238, ISC-240 | messages-parser | no |
 
 ## Decisions
 
@@ -466,6 +487,12 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-20 v0.2.0-release: `verify-w6.ts` now reads stats via `data-stat="<key>"` cells (one per `<dd>`) rather than regex-against-label. Survives label rewrites: "edges" cell can render as `M` or `M / N` and the parser handles both via `^\s*(\d+)/`. Same pattern can extend to /people and /companies verify scripts if their layouts change.
 - 2026-05-20 v0.2.0-release: tag `v0.2.0` created locally on the commit carrying ISC-221..225. Annotated tag message captures the seven days of work since `v0.1.0` (5/14): design-system migration (v0.2.0-A), interactive filters (v0.2.0-B), nav-progress + min-degree (v0.2.0-C), edge cap + verify refresh (v0.2.0-release). Push + GitHub release remain user actions per the established W7/W8a convention.
 
+- 2026-05-20 v0.3.0-A: messages.csv schema reuse — the `messages` table already exists in `src/lib/db/schema.ts` from migration `0000_remarkable_cardiac.sql`, dormant since W2 planning. No new migration in v0.3.0-A; the table is wired up via parser + ingest only. Schema is intentionally minimal (`id, tenantId, fromPersonId, toPersonId, sentAt, direction`) — no CONTENT/SUBJECT body stored. Bodies never leave the parser; only `sha1(content)[:8]` propagates as the deterministic-ID tiebreaker.
+- 2026-05-20 v0.3.0-A: owner profile URL recovery. Profile.csv has no URL column, so the owner's `linkedin_url` was previously `null` (writeOwner line 121). In v0.3.0-A the parser scans messages.csv for the first row where `FROM == profile.fullName` and captures `SENDER PROFILE URL` as the owner's URL. `backfillOwnerLinkedinUrl` updates the owner row post-`writeOwner` so subsequent message resolution uses a single URL→id path for both owner and 1st-degree. Empirically: detected URL `https://www.linkedin.com/in/matt-pwc-bi` on Matt's export. **Known limitation:** if any 1st-degree contact shares the owner's full name, detection picks the first match — fine for single-user dev build, must revisit at W8 multi-tenant fork.
+- 2026-05-20 v0.3.0-A: 1st-degree-only invariant is doctrine, not a bug. Real Complete-export smoke drops 654 / 2228 expanded (29.4%) at the people-FK gate — InMail from non-connections, deleted accounts, group chats with strangers. This is **selection bias**, not noise: dropped cohort is systematically higher-signal for new-opportunity use cases (recruiting, sourcing, intros). For v0.3.0-A's purpose (edge-weight signal for the *existing* network), the kept 71% is exactly the right cohort. Advisor 2026-05-20 flagged this as a posture-not-bug; documented here so v0.3.0-B/W8 can revisit with a `messages_unresolved` sidecar table if downstream use cases need the dropped cohort.
+- 2026-05-20 v0.3.0-A: refined (Advisor catch): deterministic message ID composition initially was `sha1(tenantId|msg|conversationId|sentAtEpoch|fromPersonId|toPersonId)`. Advisor flagged same-second collision risk — LinkedIn's DATE column is whole-second resolution, rapid-fire bursts can share an epoch. Refinement: added `contentHash = sha1(CONTENT)[:8]` as a tiebreaker in the ID input tuple. The CONTENT body itself never leaves the parser — only its hash propagates. Empirical confirmation: re-running the smoke after the fix lifted `inserted` from 1570 → **1573 (+3)** — three actual messages in Matt's own export had been collapsing before the refinement.
+- 2026-05-20 v0.3.0-A: writeMessages batched insert chunk size = 200 rows. SQLite via libsql tolerates this comfortably under any practical parameter-count limit and minimises round-trips vs the per-row `await db.insert(...).values(one)` pattern that ingest still uses for connections/people/positions (those tables ingest at ~1800 rows max; messages at potentially 10k+ post-expansion needs the batch path).
+
 ## Changelog
 
 - 2026-05-19 (v0.2.0) — **The v0.1.x light palette was data-blind; "post-release polish" turned into a full design-system rebuild**
@@ -485,6 +512,12 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
   - **Refuted by:** Advisor closing call on W5b. The option label was a class-name (1-hop graph traversal) but the option description spelled out the actual operational rule (`score = confidence(Y↔X)`, manual=1.0). My implementation matched the description but the label suggested a different formula — a real ambiguity that would have bitten future readers.
   - **Learned:** When a user picks an option, the description is the contract. Label is sales copy. Future ISC writing: if the label is class-name-shaped ("Strategy A", "Buckets", "Heuristic"), restate the operational rule in the option description AND copy it verbatim into the ISC text. Don't let the slogan-sized label do load-bearing work.
   - **Criterion now:** ISC-135 spells out the formula explicitly (`manual ? 1.0 : max(derived.confidence)`); W5b Decisions entry captures the label/description drift so future-Claude doesn't re-derive the wrong formula.
+
+- 2026-05-20 (v0.3.0-A) — **Deterministic IDs over user-event data need a content tiebreaker, full stop**
+  - **Conjectured:** A deterministic message `id = sha1(tenantId|msg|conversationId|sentAtEpoch|fromPersonId|toPersonId)` is collision-free: `conversationId` is opaque-unique per thread, and within a thread two messages cannot share a second.
+  - **Refuted by:** Advisor (Rule 2 commitment-boundary call, 2026-05-20) flagged same-second-same-pair collision risk. Empirical run after adding `contentHash = sha1(CONTENT)[:8]` to the ID tuple: real-data `inserted` count went **1570 → 1573 (+3)** on Matt's own export. The "cannot share a second" assumption was wrong — LinkedIn's DATE column is whole-second resolution, and rapid-fire bursts ("hey" / "hi" / "lol" within the same second of the same conversation) are common enough to surface three collisions in a 1.5k-message archive.
+  - **Learned:** For any deterministic ID over user-event data — messages, clicks, comments, transactions — the tuple MUST include a payload-content element, not just `(participants, timestamp)`. Whole-second timestamp resolution + chatty users guarantees collisions at scale. The mitigation is cheap (`sha1(payload)[:8]` adds 4 bytes of entropy) and pays for itself the first time it ships. **Pattern: any "deterministic identity" formula that doesn't reference the payload is a silent data-loss vector.**
+  - **Criterion now:** ISC-235.1 enforces `contentHash` in the message ID tuple. The CONTENT body never persists — only `sha1(content)[:8]` propagates from parser to ingest. Future deterministic-ID work on Strand (Calendar events, Gmail threads when those land) inherits the same rule via this Changelog entry.
 
 - 2026-05-13 (W4) — **Derived-edge kind taxonomy: 2 kinds → 3 kinds**
   - **Conjectured:** Two kinds (`shared_employer_overlap` + `shared_employer_no_overlap`) plus a confidence-only knob would cleanly carry the signal-strength axis.
@@ -590,3 +623,10 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-220 (loading.tsx): `src/app/graph/loading.tsx`, `src/app/people/loading.tsx`, `src/app/companies/loading.tsx` present; routes return 200 in prod (`curl /graph` 200, `/people` 200, `/companies` 200). Manual confirmation that Next 14 picks these up: stripped one and saw blank screen during compile; restored and saw the skeleton.
 - v0.2.0-C regression: `tsc --noEmit` clean. Prod build (`bun run build`) succeeds — 4m16s first time, 2m03s rebuild after edits; bundle size unchanged for `/graph` route (143 KB First Load JS). All prior v0.2.0-B verifications still green (chip toggles + confidence slider + Back-button restore confirmed via re-running the v0.2.0-B probe).
 - Cato (E3 cross-vendor audit, v0.2.0-C): `skipped` — same WSL-host gap. Advisor not invoked; scope was small, browser-verify caught and confirmed the work end-to-end, and the only non-obvious design decision (click-intercept vs router-events) is dictated by Next 14 having no other navigation-start hook.
+
+- ISC-227..231, ISC-239, ISC-241 (v0.3.0-A parser): `bun test src/lib/linkedin/parse.test.ts` → **16/16 pass** (existing 6 + 10 new for messages). Real Complete export smoke (`bun -e parseLinkedInExport(...)`): 252ms parse time on 2209 raw rows → 2228 expanded records; `messagesParseStats: {parsed:2209, expanded:2228, skipped_no_url:108, skipped_no_date:0}`; ownerProfileUrl detected as `https://www.linkedin.com/in/matt-pwc-bi`.
+- ISC-232..238, ISC-240 (v0.3.0-A ingest): full `ingestLinkedInExport` run on Complete export → `messageStats: {parsed:2209, expanded:2228, skipped_no_url:108, skipped_no_date:0, skipped_no_person:654, inserted:1573}`. Ingest duration 37.8s. Direction breakdown: 625 sent / 945 received = 1570 (was 1570 pre-contentHash, **+3 after the Advisor catch on same-second collision**). `SELECT COUNT(*) FROM messages WHERE from_person_id = to_person_id AND tenant_id='local'` → 0 (anti-ISC-238 verified).
+- ISC-235 (idempotency): re-ingest of same zip bytes returns `{duplicate:true, messages:1570}` via the `existingBatch` sha256 shortcut; messages-table delta is 0 across the re-run. (Note: number is 1570 here because this verification ran before the contentHash refinement; post-refinement re-smoke landed at 1573, then re-re-ingest of the same bytes still delta=0.)
+- ISC-237: `inserted` (1573) ≥ 80% of (`parsed` − `skipped_no_person`) (1555). Actual: 1573 / 1555 = 101%. PASSED.
+- v0.3.0-A regression: `bun run typecheck` clean; pre-existing test count went 6 → 16 (10 new messages tests); existing `parse.test.ts` real-export round-trip (`ISC-1..10`) still passes against Basic export. No verify-w6 regression — `data-stat` cells unchanged; the change is purely in `src/lib/linkedin/` + `src/lib/db/schema.ts` use, not in the graph rendering path.
+- Cato (E3 cross-vendor audit, v0.3.0-A): `skipped` — codex CLI still not installed (same gap noted W4..v0.2.0-C). Advisor (commitment-boundary, Rule 2) **invoked and produced a real catch**: same-second deterministic-ID collision risk on rapid-fire same-pair messages. Refinement landed as `contentHash` element in the ID tuple. Empirical impact: 3 actual messages recovered (1570 → 1573). Other Advisor items: owner-name-collision (deferred to W8 multi-tenant), 1st-degree-only as selection bias (documented in Decisions; deferred as posture-not-bug).

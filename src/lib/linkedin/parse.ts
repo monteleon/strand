@@ -1,4 +1,8 @@
 import JSZip from "jszip";
+import { createHash } from "node:crypto";
+
+const shortContentHash = (s: string) =>
+  createHash("sha1").update(s).digest("hex").slice(0, 8);
 
 export type LinkedInConnection = {
   firstName: string;
@@ -30,10 +34,37 @@ export type LinkedInProfile = {
   geoLocation: string | null;
 };
 
+export type LinkedInMessage = {
+  conversationId: string;
+  sentAtEpoch: number;          // seconds since epoch (UTC)
+  senderProfileUrl: string;     // canonicalised (trim only — parity with Connections.csv)
+  recipientProfileUrl: string;  // post-group-expansion: one record per (sender, recipient) pair
+  folder: string;               // INBOX / ARCHIVE / etc.
+  // Short content hash — sha1(CONTENT)[:8]. NOT stored in the DB; consumed
+  // only as a tiebreaker in the deterministic message ID so rapid-fire
+  // same-second-same-pair messages (LinkedIn's DATE column is whole-second
+  // resolution) do not collide. The CONTENT body itself never leaves the
+  // parser — only its hash.
+  contentHash: string;
+};
+
+export type MessagesParseStats = {
+  parsed: number;          // raw CSV record count (post-quoting, pre-expansion)
+  expanded: number;        // post-group-expansion (sender, recipient) pair count
+  skipped_no_url: number;  // record-level guard: sender or all recipients missing
+  skipped_no_date: number; // DATE column unparseable
+};
+
 export type ParsedExport = {
   profile: LinkedInProfile;
   connections: LinkedInConnection[];
   positions: LinkedInPosition[];
+  // v0.3.0-A: messages.csv is in the Complete export only; Basic ships an empty list.
+  messages: LinkedInMessage[];
+  // Owner's profile URL inferred from messages.csv (FROM == owner.fullName).
+  // Null when messages.csv is missing or the owner has sent no messages in this archive.
+  ownerProfileUrl: string | null;
+  messagesParseStats: MessagesParseStats;
 };
 
 const MONTHS: Record<string, string> = {
@@ -48,6 +79,17 @@ export function parseConnectionDate(s: string): string | null {
   const mm = MONTHS[m[2].toLowerCase()];
   if (!mm) return null;
   return `${m[3]}-${mm}-${m[1].padStart(2, "0")}`;
+}
+
+// "2026-05-12 12:16:17 UTC" → epoch seconds. Empty / unparseable → null.
+export function parseMessageDate(s: string): number | null {
+  const trimmed = s.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC$/);
+  if (!m) return null;
+  const t = Date.parse(`${m[1]}T${m[2]}Z`);
+  if (Number.isNaN(t)) return null;
+  return Math.floor(t / 1000);
 }
 
 // "Jul 2023" → "2023-07-01"; empty → null
@@ -200,6 +242,81 @@ function parsePositions(text: string): LinkedInPosition[] {
   });
 }
 
+// Canonicalise a LinkedIn profile URL for join-key parity with people.linkedin_url.
+// LinkedIn ships URLs identically across Connections.csv and messages.csv, so
+// .trim() alone is sufficient — no scheme/locale normalisation needed.
+function canonicaliseProfileUrl(s: string): string {
+  return s.trim();
+}
+
+// Parse messages.csv. Returns expanded (sender, recipient) records, inferred
+// owner profile URL, and a stats breakdown. Group-conversation rows expand
+// into N records (one per recipient). Self-DMs are dropped post-expansion.
+// Exported for unit testing — runtime ingest path goes through parseLinkedInExport.
+export function parseMessages(
+  text: string,
+  ownerFullName: string,
+): { messages: LinkedInMessage[]; ownerProfileUrl: string | null; stats: MessagesParseStats } {
+  const { headers, rows } = readCsv(text, "CONVERSATION ID");
+  const out: LinkedInMessage[] = [];
+  let ownerProfileUrl: string | null = null;
+  let parsed = 0;
+  let expanded = 0;
+  let skipped_no_url = 0;
+  let skipped_no_date = 0;
+  for (const row of rows) {
+    parsed += 1;
+    const conversationId = col(headers, row, "CONVERSATION ID").trim();
+    const fromName = col(headers, row, "FROM").trim();
+    const senderUrl = canonicaliseProfileUrl(col(headers, row, "SENDER PROFILE URL"));
+    // RECIPIENT PROFILE URLS for group messages: comma-separated inside the
+    // quoted CSV cell. After CSV-level parsing the cell is a single string;
+    // we split on `,` to expand into individual recipients.
+    const recipientField = col(headers, row, "RECIPIENT PROFILE URLS");
+    const recipientUrls = recipientField
+      .split(",")
+      .map((u) => canonicaliseProfileUrl(u))
+      .filter((u) => u !== "");
+    const sentAtEpoch = parseMessageDate(col(headers, row, "DATE"));
+    const folder = col(headers, row, "FOLDER").trim();
+    const content = col(headers, row, "CONTENT");
+    const contentHash = shortContentHash(content);
+
+    if (sentAtEpoch === null) {
+      skipped_no_date += 1;
+      continue;
+    }
+    // Record-level guard (feedback memory 2026-05-13): drop messages that
+    // carry neither a sender URL nor any recipient URL after canonicalisation.
+    if (!senderUrl || recipientUrls.length === 0) {
+      skipped_no_url += 1;
+      continue;
+    }
+    // Owner detection: first row where FROM display name matches the
+    // owner's full name from Profile.csv → the SENDER URL is the owner's URL.
+    if (!ownerProfileUrl && fromName && fromName === ownerFullName) {
+      ownerProfileUrl = senderUrl;
+    }
+    for (const recipientUrl of recipientUrls) {
+      if (recipientUrl === senderUrl) continue; // self-DM artefacts
+      out.push({
+        conversationId,
+        sentAtEpoch,
+        senderProfileUrl: senderUrl,
+        recipientProfileUrl: recipientUrl,
+        folder,
+        contentHash,
+      });
+      expanded += 1;
+    }
+  }
+  return {
+    messages: out,
+    ownerProfileUrl,
+    stats: { parsed, expanded, skipped_no_url, skipped_no_date },
+  };
+}
+
 function parseProfile(text: string): LinkedInProfile {
   const { headers, rows } = readCsv(text, "First Name");
   if (rows.length !== 1) {
@@ -235,9 +352,35 @@ export async function parseLinkedInExport(zipBytes: ArrayBuffer | Uint8Array | B
     readZipFile(zip, "Connections.csv"),
     readZipFile(zip, "Positions.csv"),
   ]);
+  const profile = parseProfile(profileCsv);
+  const connections = parseConnections(connectionsCsv);
+  const positions = parsePositions(positionsCsv);
+
+  // messages.csv only ships in the Complete export. Basic users get an empty
+  // messages list with parse stats zeroed — not an error.
+  let messages: LinkedInMessage[] = [];
+  let ownerProfileUrl: string | null = null;
+  let messagesParseStats: MessagesParseStats = {
+    parsed: 0,
+    expanded: 0,
+    skipped_no_url: 0,
+    skipped_no_date: 0,
+  };
+  const messagesFile = zip.file("messages.csv");
+  if (messagesFile) {
+    const messagesCsv = await messagesFile.async("string");
+    const r = parseMessages(messagesCsv, profile.fullName);
+    messages = r.messages;
+    ownerProfileUrl = r.ownerProfileUrl;
+    messagesParseStats = r.stats;
+  }
+
   return {
-    profile: parseProfile(profileCsv),
-    connections: parseConnections(connectionsCsv),
-    positions: parsePositions(positionsCsv),
+    profile,
+    connections,
+    positions,
+    messages,
+    ownerProfileUrl,
+    messagesParseStats,
   };
 }

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { parseConnectionDate, parseLinkedInExport, parsePositionDate } from "./parse";
+import {
+  parseConnectionDate,
+  parseLinkedInExport,
+  parseMessageDate,
+  parseMessages,
+  parsePositionDate,
+} from "./parse";
 
 const REAL_EXPORT_PATH =
   "/mnt/c/Users/mca/Downloads/Basic_LinkedInDataExport_05-12-2026.zip.zip";
@@ -22,6 +28,141 @@ describe("date parsers", () => {
   test("ISC-5: empty position date → null (signals current)", () => {
     expect(parsePositionDate("")).toBeNull();
     expect(parsePositionDate("   ")).toBeNull();
+  });
+});
+
+describe("v0.3.0-A: messages.csv parser", () => {
+  const HEADER =
+    `"CONVERSATION ID","CONVERSATION TITLE","FROM","SENDER PROFILE URL",` +
+    `"TO","RECIPIENT PROFILE URLS","DATE","SUBJECT","CONTENT","FOLDER","ATTACHMENTS"`;
+
+  test("ISC-228: parseMessageDate handles LinkedIn's 'YYYY-MM-DD HH:MM:SS UTC' format", () => {
+    expect(parseMessageDate("2026-05-12 12:16:17 UTC")).toBe(
+      Math.floor(Date.UTC(2026, 4, 12, 12, 16, 17) / 1000),
+    );
+  });
+
+  test("ISC-228: parseMessageDate returns null on empty / malformed input", () => {
+    expect(parseMessageDate("")).toBeNull();
+    expect(parseMessageDate("   ")).toBeNull();
+    expect(parseMessageDate("2026-05-12T12:16:17Z")).toBeNull();
+    expect(parseMessageDate("garbage")).toBeNull();
+  });
+
+  test("ISC-227, ISC-230: parses a single 1:1 message — happy path", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-1","","Miguel","https://www.linkedin.com/in/miguel",` +
+      `"Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"2026-04-18 08:18:17 UTC","","Ok, buen finde!","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(1);
+    expect(r.messages[0].conversationId).toBe("conv-1");
+    expect(r.messages[0].senderProfileUrl).toBe("https://www.linkedin.com/in/miguel");
+    expect(r.messages[0].recipientProfileUrl).toBe(
+      "https://www.linkedin.com/in/matt-pwc-bi",
+    );
+    expect(r.stats).toEqual({
+      parsed: 1,
+      expanded: 1,
+      skipped_no_url: 0,
+      skipped_no_date: 0,
+    });
+  });
+
+  test("ISC-230: group conversation expands into one record per recipient", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-g","Group","Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"David, Rubén","https://www.linkedin.com/in/david,https://www.linkedin.com/in/ruben",` +
+      `"2026-04-18 08:18:17 UTC","","hey","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(2);
+    expect(r.messages.map((m) => m.recipientProfileUrl).sort()).toEqual([
+      "https://www.linkedin.com/in/david",
+      "https://www.linkedin.com/in/ruben",
+    ]);
+    expect(r.stats.parsed).toBe(1);
+    expect(r.stats.expanded).toBe(2);
+  });
+
+  test("ISC-231: row with no recipient URL is skipped (record-level guard)", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-x","","Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"Unknown","",` +
+      `"2026-04-18 08:18:17 UTC","","","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(0);
+    expect(r.stats.skipped_no_url).toBe(1);
+    expect(r.stats.expanded).toBe(0);
+  });
+
+  test("ISC-228: row with unparseable date is skipped and counted", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-bad","","Miguel","https://www.linkedin.com/in/miguel",` +
+      `"Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"not-a-date","","hi","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(0);
+    expect(r.stats.skipped_no_date).toBe(1);
+  });
+
+  test("ISC-238: self-DM (sender URL == recipient URL) is dropped post-expansion", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-self","","Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"2026-04-18 08:18:17 UTC","","note","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(0);
+    expect(r.stats.parsed).toBe(1);
+    expect(r.stats.expanded).toBe(0);
+  });
+
+  test("owner profile URL is detected from first FROM == owner.fullName row", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-a","","Miguel","https://www.linkedin.com/in/miguel",` +
+      `"Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"2026-04-18 08:18:17 UTC","","hi","INBOX",""\n` +
+      `"conv-a","","Matt Alexander","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"Miguel","https://www.linkedin.com/in/miguel",` +
+      `"2026-04-18 08:19:17 UTC","","sup","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.ownerProfileUrl).toBe("https://www.linkedin.com/in/matt-pwc-bi");
+    expect(r.messages.length).toBe(2);
+  });
+
+  test("ISC-235.1 (Advisor 2026-05-20): same-second same-pair messages get distinct contentHash → distinct IDs", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-burst","","Matt","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"Miguel","https://www.linkedin.com/in/miguel",` +
+      `"2026-04-18 08:18:17 UTC","","hey","INBOX",""\n` +
+      `"conv-burst","","Matt","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"Miguel","https://www.linkedin.com/in/miguel",` +
+      `"2026-04-18 08:18:17 UTC","","hi","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(2);
+    // Same (conversationId, sentAtEpoch, sender, recipient) but distinct
+    // CONTENT → distinct contentHash → distinct deterministic IDs at ingest.
+    expect(r.messages[0].contentHash).not.toBe(r.messages[1].contentHash);
+  });
+
+  test("ISC-239: multi-line CONTENT (quoted newline) does not break row parsing", () => {
+    const csv =
+      `${HEADER}\n` +
+      `"conv-m","","Miguel","https://www.linkedin.com/in/miguel",` +
+      `"Matt","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"2026-04-18 08:18:17 UTC","","line1\nline2\nline3","INBOX",""\n` +
+      `"conv-m","","Matt","https://www.linkedin.com/in/matt-pwc-bi",` +
+      `"Miguel","https://www.linkedin.com/in/miguel",` +
+      `"2026-04-19 08:18:17 UTC","","reply","INBOX",""\n`;
+    const r = parseMessages(csv, "Matt Alexander");
+    expect(r.messages.length).toBe(2);
+    expect(r.stats.parsed).toBe(2);
   });
 });
 

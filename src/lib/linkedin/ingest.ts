@@ -4,6 +4,15 @@ import { eq } from "drizzle-orm";
 import { parseLinkedInExport, type ParsedExport } from "./parse";
 import { deriveSharedEmployerEdges } from "@/lib/derived/edges";
 
+export type IngestMessageStats = {
+  parsed: number;
+  expanded: number;
+  skipped_no_url: number;
+  skipped_no_date: number;
+  skipped_no_person: number;
+  inserted: number;
+};
+
 export type IngestResult = {
   batchId: string;
   duplicate: boolean;
@@ -12,7 +21,11 @@ export type IngestResult = {
     companies: number;
     positions: number;
     connections: number;
+    messages: number;
   };
+  // v0.3.0-A: present on a fresh ingest that included messages.csv. Omitted
+  // on duplicate-shortcut returns and on Basic exports (no messages.csv in zip).
+  messageStats?: IngestMessageStats;
 };
 
 const sha1Hex = (s: string) =>
@@ -89,6 +102,11 @@ export async function ingestLinkedInExport(
   });
 
   await writeOwner(parsed, tenantId, batchId, now);
+  // v0.3.0-A: Profile.csv has no URL column; the owner's profile URL is
+  // recovered from messages.csv (FROM == owner.fullName → SENDER URL) and
+  // backfilled here so subsequent message resolution can use a single URL→id
+  // path. Safe no-op when messages.csv is missing or owner sent no messages.
+  await backfillOwnerLinkedinUrl(parsed, tenantId);
   await writeCompanies(parsed, tenantId);
   await writePeople(parsed, tenantId, batchId, now);
   await writeConnections(parsed, tenantId, now);
@@ -99,8 +117,12 @@ export async function ingestLinkedInExport(
   // (clear-then-rebuild) so cheap on every ingest. ISC-90.
   await deriveSharedEmployerEdges(tenantId, now);
 
+  // v0.3.0-A: ingest messages last — depends on owner backfill + writePeople
+  // having populated all 1st-degree person rows.
+  const messageStats = await writeMessages(parsed, tenantId);
+
   const counts = await readTenantCounts(tenantId);
-  return { batchId, duplicate: false, counts };
+  return { batchId, duplicate: false, counts, messageStats };
 }
 
 async function writeOwner(
@@ -282,11 +304,136 @@ export async function writeSynthesisedConnectionPositions(
 }
 
 async function readTenantCounts(tenantId: string) {
-  const [people, companies, positions, connections] = await Promise.all([
+  const [people, companies, positions, connections, messages] = await Promise.all([
     db.$count(schema.people, eq(schema.people.tenantId, tenantId)),
     db.$count(schema.companies, eq(schema.companies.tenantId, tenantId)),
     db.$count(schema.positions, eq(schema.positions.tenantId, tenantId)),
     db.$count(schema.connections, eq(schema.connections.tenantId, tenantId)),
+    db.$count(schema.messages, eq(schema.messages.tenantId, tenantId)),
   ]);
-  return { people, companies, positions, connections };
+  return { people, companies, positions, connections, messages };
+}
+
+// Backfill the owner's linkedin_url from messages.csv detection. Writes only
+// when the parser successfully inferred the URL (FROM == owner.fullName).
+async function backfillOwnerLinkedinUrl(parsed: ParsedExport, tenantId: string) {
+  if (!parsed.ownerProfileUrl) return;
+  const id = ownerPersonId(tenantId, parsed.profile.fullName);
+  await db
+    .update(schema.people)
+    .set({ linkedinUrl: parsed.ownerProfileUrl })
+    .where(eq(schema.people.id, id));
+}
+
+// v0.3.0-A: ingest messages.csv into the messages table.
+//
+// Resolution:
+//   sender URL == owner URL → ownerPersonId
+//   otherwise → personIdFromUrl(tenantId, url) IF that ID exists in `people`
+//
+// Skip reasons:
+//   no_person  — sender or recipient URL doesn't map to any people row.
+//                Captures InMail from non-connections, messages from deleted
+//                accounts, and (until owner URL is detected) the owner's own
+//                messages on a tenant that has never had Profile.csv URL.
+//   self-DM    — fromId === toId after resolution. Dropped silently (not a
+//                meaningful relationship signal).
+//
+// Idempotency: deterministic message `id` from (tenantId, conversationId,
+// sentAtEpoch, fromPersonId, toPersonId) + ON CONFLICT DO NOTHING. Re-ingest
+// of the same archive bytes hits the existingBatch shortcut earlier and never
+// reaches this function; re-ingest of a DIFFERENT archive that overlaps still
+// converges on the same row IDs.
+async function writeMessages(
+  parsed: ParsedExport,
+  tenantId: string,
+): Promise<IngestMessageStats> {
+  const base = {
+    ...parsed.messagesParseStats,
+    skipped_no_person: 0,
+    inserted: 0,
+  };
+  if (parsed.messages.length === 0) return base;
+
+  const ownerId = ownerPersonId(tenantId, parsed.profile.fullName);
+  const ownerUrl = parsed.ownerProfileUrl;
+
+  // Pre-fetch the tenant's valid people IDs once — O(N) lookup instead of
+  // O(N×M) SELECT-per-message.
+  const peopleRows = await db
+    .select({ id: schema.people.id })
+    .from(schema.people)
+    .where(eq(schema.people.tenantId, tenantId));
+  const validPeopleIds = new Set<string>();
+  for (const r of peopleRows) validPeopleIds.add(r.id);
+
+  const resolve = (url: string): string | null => {
+    if (ownerUrl && url === ownerUrl) return ownerId;
+    const id = personIdFromUrl(tenantId, url);
+    return validPeopleIds.has(id) ? id : null;
+  };
+
+  type MessageRow = {
+    id: string;
+    tenantId: string;
+    fromPersonId: string;
+    toPersonId: string;
+    sentAt: Date;
+    direction: "sent" | "received";
+  };
+
+  const batch: MessageRow[] = [];
+  let skipped_no_person = 0;
+  for (const m of parsed.messages) {
+    const fromId = resolve(m.senderProfileUrl);
+    const toId = resolve(m.recipientProfileUrl);
+    if (!fromId || !toId) {
+      skipped_no_person += 1;
+      continue;
+    }
+    if (fromId === toId) continue;
+    const direction: "sent" | "received" = fromId === ownerId ? "sent" : "received";
+    // contentHash tiebreaks same-second same-pair messages — LinkedIn's DATE
+    // column has whole-second resolution, so rapid-fire bursts can share an
+    // epoch and otherwise hash to identical IDs (Advisor catch, 2026-05-20).
+    const id = sha1Hex(
+      `${tenantId}|msg|${m.conversationId}|${m.sentAtEpoch}|${fromId}|${toId}|${m.contentHash}`,
+    );
+    batch.push({
+      id,
+      tenantId,
+      fromPersonId: fromId,
+      toPersonId: toId,
+      sentAt: new Date(m.sentAtEpoch * 1000),
+      direction,
+    });
+  }
+
+  // Track real-DB delta so re-ingest of overlapping archives reports
+  // truthful "inserted" counts (DO NOTHING conflicts don't count).
+  const beforeCount = await db.$count(
+    schema.messages,
+    eq(schema.messages.tenantId, tenantId),
+  );
+
+  // Batched insert. SQLite via libsql tolerates a few hundred VALUES rows
+  // per statement; 200 keeps the parameter count well under any practical
+  // limit and minimises round-trips vs the per-row pattern used elsewhere
+  // in this ingest.
+  const CHUNK = 200;
+  for (let i = 0; i < batch.length; i += CHUNK) {
+    const slice = batch.slice(i, i + CHUNK);
+    await db.insert(schema.messages).values(slice).onConflictDoNothing();
+  }
+
+  const afterCount = await db.$count(
+    schema.messages,
+    eq(schema.messages.tenantId, tenantId),
+  );
+
+  return {
+    ...parsed.messagesParseStats,
+    skipped_no_person,
+    inserted: afterCount - beforeCount,
+  };
 }
