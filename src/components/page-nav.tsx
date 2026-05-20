@@ -8,17 +8,32 @@ type Props = {
   q: string;
   hasPrev: boolean;
   hasNext: boolean;
+  sort?: string;
 };
 
-function buildHref(basePath: string, page: number, q: string): string {
+function buildHref(
+  basePath: string,
+  page: number,
+  q: string,
+  sort?: string,
+): string {
   const params = new URLSearchParams();
   if (page > 1) params.set("page", String(page));
   if (q) params.set("q", q);
+  if (sort) params.set("sort", sort);
   const qs = params.toString();
   return qs ? `${basePath}?${qs}` : basePath;
 }
 
-export function PageNav({ basePath, page, totalPages, q, hasPrev, hasNext }: Props) {
+export function PageNav({
+  basePath,
+  page,
+  totalPages,
+  q,
+  hasPrev,
+  hasNext,
+  sort,
+}: Props) {
   if (totalPages <= 1) return null;
   return (
     <nav
@@ -27,7 +42,7 @@ export function PageNav({ basePath, page, totalPages, q, hasPrev, hasNext }: Pro
     >
       <PageLink
         disabled={!hasPrev}
-        href={buildHref(basePath, page - 1, q)}
+        href={buildHref(basePath, page - 1, q, sort)}
         label="← Previous"
       />
       <span className="font-mono text-xs text-text-secondary">
@@ -36,7 +51,7 @@ export function PageNav({ basePath, page, totalPages, q, hasPrev, hasNext }: Pro
       </span>
       <PageLink
         disabled={!hasNext}
-        href={buildHref(basePath, page + 1, q)}
+        href={buildHref(basePath, page + 1, q, sort)}
         label="Next →"
       />
     </nav>

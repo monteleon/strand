@@ -6,6 +6,11 @@ import {
   confidenceLabel,
   listDerivedEdgesForPerson,
 } from "@/lib/queries/derivedEdges";
+import {
+  formatDateYMD,
+  getMessageStatsForPerson,
+  listMessageThreadForPerson,
+} from "@/lib/queries/messages";
 import { AddConnection } from "@/components/add-connection";
 import { ManualEdges } from "./manual-edges";
 
@@ -19,11 +24,16 @@ export default async function PersonDetailPage({
   const data = await getPersonById(params.id);
   if (!data) notFound();
   const { person, positions, connectedAt } = data;
-  // Two query calls — the manual and derived edge lists travel through
-  // separate functions on purpose (ISC-94: different epistemics, never
-  // co-mingled at the read layer).
+  // Three query calls — manual edges, derived edges, and messages travel
+  // through separate modules (ISC-94 / ISC-253: three epistemic categories,
+  // never co-mingled at the read layer).
   const manualEdges = await listManualEdgesForPerson(person.id);
   const derivedEdges = await listDerivedEdgesForPerson(person.id);
+  const messageStats = await getMessageStatsForPerson(person.id);
+  const messageThread =
+    messageStats.total > 0
+      ? await listMessageThreadForPerson(person.id, 20)
+      : [];
 
   return (
     <div className="min-h-screen bg-canvas text-text-primary">
@@ -186,6 +196,98 @@ export default async function PersonDetailPage({
                           : " · same employer, no overlap window"}
                     </p>
                   </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* Third epistemic category: observed communication events.
+            Never mixed with manual or derived edges (ISC-253 / ISC-265 /
+            ISC-266). Stats row ALWAYS renders — zeros are signal, not
+            absence. Hiding the row would conflate "we checked, there were
+            none" with "we don't track this here" — the third-category
+            architecture exists precisely to make that distinction legible
+            (Advisor 2026-05-20). */}
+        <section className="mt-8" data-testid="messages-section">
+          <h2 className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+            Messages{" "}
+            <span className="ml-1 normal-case text-text-tertiary">
+              (LinkedIn messages exchanged — direction + date only; bodies
+              never stored)
+            </span>
+          </h2>
+          <dl
+            data-testid="messages-stats"
+            className="mt-3 grid grid-cols-3 gap-x-6 gap-y-2 text-sm"
+          >
+            <div>
+              <dt className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary">
+                Sent
+              </dt>
+              <dd
+                data-stat="sent"
+                className="mt-0.5 font-mono text-text-primary"
+              >
+                {messageStats.sent}
+              </dd>
+            </div>
+            <div>
+              <dt className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary">
+                Received
+              </dt>
+              <dd
+                data-stat="received"
+                className="mt-0.5 font-mono text-text-primary"
+              >
+                {messageStats.received}
+              </dd>
+            </div>
+            <div>
+              <dt className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary">
+                Last contact
+              </dt>
+              <dd
+                data-stat="last-contact"
+                className="mt-0.5 font-mono text-text-primary"
+              >
+                {messageStats.lastAt
+                  ? formatDateYMD(messageStats.lastAt)
+                  : "—"}
+              </dd>
+            </div>
+          </dl>
+          {messageStats.total === 0 ? (
+            <p
+              data-testid="messages-empty"
+              className="mt-3 text-sm text-text-secondary"
+            >
+              No messages exchanged with this person.
+            </p>
+          ) : (
+            <ul
+              data-testid="messages-thread"
+              className="mt-3 divide-y divide-border-subtle rounded-md border border-border-subtle bg-surface"
+            >
+              {messageThread.map((m) => (
+                <li
+                  key={m.id}
+                  data-testid="messages-thread-row"
+                  data-direction={m.direction}
+                  className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-sm"
+                >
+                  <span
+                    className={
+                      m.direction === "sent"
+                        ? "font-medium text-accent-signal"
+                        : "font-medium text-text-primary"
+                    }
+                  >
+                    {m.direction === "sent" ? "Sent" : "Received"}
+                  </span>
+                  <span className="font-mono text-xs text-text-secondary">
+                    {formatDateYMD(m.sentAt)}
+                  </span>
                 </li>
               ))}
             </ul>

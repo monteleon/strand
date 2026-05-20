@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.3.0-A — Messages.csv ingest (slice 1: parser + ingest path, data layer only)
-slug: v0.3.0-A-messages-ingest
+current_task: v0.3.0-B — Messages UI (surface sent/received/thread on /people/[id] and /people)
+slug: v0.3.0-B-messages-ui
 effort: E3
 phase: complete
-progress: 16/16
+progress: 26/26
 mode: ALGORITHM
 started: 2026-05-20
 updated: 2026-05-20
@@ -345,6 +345,49 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-240: Anti — `writeMessages` batches inserts via `db.insert(...).values(slice)` in chunks of 200, not per-row. Code inspection: `for (let i = 0; i < batch.length; i += CHUNK)` loop at `src/lib/linkedin/ingest.ts`.
 - [x] ISC-241: `parse.test.ts` has 8 new messages-related tests (1:1, group, no-recipient-URL skip, bad-date skip, self-DM drop, owner-URL detection, multi-line CONTENT, parseMessageDate unit). Suite 15/15 pass.
 
+**v0.3.0-B — Messages UI** *(2026-05-20)*
+
+*Query module — src/lib/queries/messages.ts*
+
+- [x] ISC-242: `getMessageStatsForPerson(personId)` returns `{ sent: number, received: number, total: number, firstAt: Date | null, lastAt: Date | null }`; `sent` counts messages where the OTHER person is `toPersonId`, `received` where the OTHER person is `fromPersonId` (owner-perspective).
+- [x] ISC-243: Stats are computed in ONE SQL round-trip using SUM(CASE WHEN direction=...) + MIN(sent_at) + MAX(sent_at) aggregation, not four separate queries.
+- [x] ISC-244: `listMessageThreadForPerson(personId, limit=20)` returns `{ id, direction, sentAt }[]` ordered by `sentAt` DESC, capped at `limit`. No body/subject fields in the return type.
+- [x] ISC-245: `listLastContactByPeople(personIds)` batch-loads `Map<personId, Date>` for the /people list — single SQL query with `WHERE person_id IN (...)` + GROUP BY, no N+1 per-row queries.
+- [x] ISC-246: All three queries scope by `tenantId` (defaulted to `LOCAL_TENANT_ID`) and resolve owner via `getOwnerId()` from the existing people module — owner is the implicit one-side of every (owner, other) message pair.
+- [x] ISC-247: Empty-person case (no messages with that person): stats returns `{ sent: 0, received: 0, total: 0, firstAt: null, lastAt: null }`, thread returns `[]`, no crash.
+
+*Person-detail page — /people/[id]*
+
+- [x] ISC-248: `/people/[id]` renders a `data-testid="messages-section"` block positioned below the "Derived connections" section.
+- [x] ISC-249: Stats row renders three cells with `data-testid="messages-stats"`: "Sent N", "Received N", and "Last contact YYYY-MM-DD" (or "—" if no messages).
+- [x] ISC-250: Empty state: when `total === 0`, render the text "No messages exchanged with this person." and NO thread list.
+- [x] ISC-251: Non-empty: render a thread list with `data-testid="messages-thread"`, each row showing direction marker (`Sent` or `Received`) + `YYYY-MM-DD` only — no content field, no subject field.
+- [x] ISC-252: Sent and received rows are visually distinct (different colour token or icon), and the distinction is via accessible markup (e.g. `data-direction="sent" | "received"`) so the verify probe can assert both kinds render.
+- [x] ISC-253: Anti: Messages section query path imports ONLY from `@/lib/queries/messages`; the person-detail page does NOT import `messages` data via `manualEdges.ts` or `derivedEdges.ts` (grep enforcement).
+
+*People list — /people*
+
+- [x] ISC-254: `/people` row shows `last contact YYYY-MM-DD` in the same mono / tertiary-text style as `connected YYYY-MM-DD` for people with ≥1 message; absent (no element) for people with 0 messages.
+- [x] ISC-255: `/people?sort=last_contact` orders rows by last-contact-date DESC, with people who have no messages listed AFTER all people who have any (NULLS LAST).
+- [x] ISC-256: `/people?sort=name` (and the default, no `sort` param) preserves the existing alphabetical-by-full-name ordering — verified by hash-comparing the rendered list against the pre-v0.3.0-B output.
+- [x] ISC-257: Unknown `sort` value (e.g. `?sort=garbage`, `?sort=' OR 1=1 --`) falls back to default ordering — no SQL error, no injection vector.
+- [x] ISC-258: `/people` issues at most 3 SQL queries regardless of page size: count + people+connections select + one messages-module batch (sort=name: `listLastContactByPeople` over the page's IDs; sort=last_contact: `listAllLastContactDesc` for the whole tenant, composed with the full people set in JS). No per-row messages query.
+- [x] ISC-259: Empty-list state and pagination behaviour preserved — `?sort=last_contact&page=2` paginates correctly, `?q=...` filter composes with `?sort=last_contact`.
+
+*Tests*
+
+- [x] ISC-260: `src/lib/queries/messages.test.ts` exists with at least 4 test cases: (a) stats single-query shape for a person with both sent and received, (b) empty-person stats returns zeros and null dates, (c) thread chronological order (newest first, limit honoured), (d) batch `listLastContactByPeople` returns the same map size as input person IDs with correct max(sent_at).
+- [x] ISC-261: Real-data: pick the top-1 person from `listLastContactByPeople` ordered by stats.total DESC, assert that person's stats.total ≥ 10 AND stats.sent > 0 AND stats.received > 0 (a real two-way correspondent exists in the dataset).
+
+*Build + probe*
+
+- [x] ISC-262: `scripts/verify-v030b.ts` Playwright probe — visits `/people/[id]` of the top-messaged contact, asserts Messages section present, stats visible with non-zero counts, ≥1 thread row of each direction, zero `pageerror`, zero console error, zero non-localhost requests.
+- [x] ISC-263: `bun run typecheck` exits 0 after the slice (no new TS errors).
+- [x] ISC-264: Anti: no SSR/CSR hydration mismatch warning when /people page loads with `?sort=last_contact` (verified by probe `pageerror` listener).
+- [x] ISC-265: Anti: `grep -rn "from \"@/lib/queries/messages\"" src/lib/queries/manualEdges.ts src/lib/queries/derivedEdges.ts` returns 0 hits — messages queries never imported from the other two epistemic-category modules.
+- [ ] ISC-266 *(Advisor 2026-05-20)*: Anti: SQL-reference grep — `rg -nE '(FROM|JOIN|INTO|UPDATE)\s+messages\b' src/ --glob '!src/lib/queries/messages.ts' --glob '!src/lib/linkedin/ingest.ts' --glob '!src/lib/db/**' --glob '!scripts/**' --glob '!**/*.test.ts'` returns 0 hits. JS-import isolation (ISC-265) is necessary but not sufficient: the schema-access layer is where the third-epistemic-category boundary actually has to hold. listPeople was JOINing the messages table directly in the first cut; refactored to route through `listLastContactByPeople` / `listAllLastContactDesc` to close the schema leak. ingest.ts, db schema files, scripts, and tests are whitelisted (writer / definition / tooling layers).
+- [ ] ISC-267 *(Advisor 2026-05-20)*: Stats row on `/people/[id]` ALWAYS renders (zero state included). The thread list is the conditional element. Rationale: rendering zeros is the epistemic-category claim being honoured at the UI — "we tracked, there were none" vs "we don't track this here" must remain visually distinguishable. Verified by visiting a person with 0 messages and asserting `data-testid="messages-stats"` is present with `data-stat="sent"` showing "0".
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -391,6 +434,16 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | ISC-131..141 | ui | playwright at /queries/reach and /queries/reach/[id] | reach list correct shape + special states | playwright firefox |
 | ISC-142..144 | ui | playwright across all three pages | sidebar present, 0 errors, 0 non-localhost | playwright firefox |
 | ISC-145 | http | curl POST/DELETE bookmarks with the new URL shapes | 201 → 204 round-trip | curl |
+| ISC-242..247 | unit + integration | bun test against messages.test.ts; real-data smoke via sqlite3 SELECT | 4+ unit cases pass; stats counts match raw COUNT(*) | bun test + sqlite3 |
+| ISC-248..253 | ui | playwright at /people/[id] of top-messaged contact | messages-section visible, stats correct, thread items present, both directions render | playwright firefox |
+| ISC-254..259 | ui+integration | playwright at /people and /people?sort=last_contact | last-contact column present; sort ordering verified; 2-query budget enforced via dev DB query log | playwright firefox + manual query count |
+| ISC-260..261 | unit + real-data | bun test + DB introspection | 4 unit pass + top-1 person has ≥10 messages | bun test + sqlite3 |
+| ISC-262 | ui | scripts/verify-v030b.ts | 0 pageerror, 0 non-localhost, all assertions pass | playwright firefox |
+| ISC-263 | build | bun run typecheck | exit 0 | bun |
+| ISC-264 | ui | hydration mismatch probe | 0 warnings in pageerror | playwright firefox |
+| ISC-265 | grep | anti-import probe | 0 hits | grep -rn |
+| ISC-266 | grep | SQL-reference probe across src/ excluding messages module + writers | 0 hits | rg |
+| ISC-267 | ui | playwright at /people/[id] of person with 0 messages | messages-stats present with data-stat="sent" = "0" | playwright firefox |
 
 ## Features
 
@@ -427,6 +480,10 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | verify-w6-refresh *(v0.2.0-release)* | ISC-224..225 | edge-cap | no |
 | messages-parser *(v0.3.0-A)* | ISC-227..231, ISC-239, ISC-241 | (existing JSZip + parseCSV path) | yes (with messages-ingest if record types lock first) |
 | messages-ingest *(v0.3.0-A)* | ISC-232..238, ISC-240 | messages-parser | no |
+| messages-query-module *(v0.3.0-B)* | ISC-242..247, ISC-260 | messages-ingest | yes (with messages-test) |
+| messages-person-detail *(v0.3.0-B)* | ISC-248..253 | messages-query-module | yes (with messages-people-list) |
+| messages-people-list *(v0.3.0-B)* | ISC-254..259 | messages-query-module | yes (with messages-person-detail) |
+| verify-v030b *(v0.3.0-B)* | ISC-261..265 | messages-person-detail, messages-people-list | no (gate) |
 
 ## Decisions
 
@@ -493,6 +550,16 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-20 v0.3.0-A: refined (Advisor catch): deterministic message ID composition initially was `sha1(tenantId|msg|conversationId|sentAtEpoch|fromPersonId|toPersonId)`. Advisor flagged same-second collision risk — LinkedIn's DATE column is whole-second resolution, rapid-fire bursts can share an epoch. Refinement: added `contentHash = sha1(CONTENT)[:8]` as a tiebreaker in the ID input tuple. The CONTENT body itself never leaves the parser — only its hash propagates. Empirical confirmation: re-running the smoke after the fix lifted `inserted` from 1570 → **1573 (+3)** — three actual messages in Matt's own export had been collapsing before the refinement.
 - 2026-05-20 v0.3.0-A: writeMessages batched insert chunk size = 200 rows. SQLite via libsql tolerates this comfortably under any practical parameter-count limit and minimises round-trips vs the per-row `await db.insert(...).values(one)` pattern that ingest still uses for connections/people/positions (those tables ingest at ~1800 rows max; messages at potentially 10k+ post-expansion needs the batch path).
 
+- 2026-05-20 v0.3.0-B: **Scope locked at messages-on-/people/[id] + messages-on-/people, both with thread timeline and sort=last_contact toggle.** User picked both "thin thread timeline" and "sort toggle" options at PLAN. Warm-path-finder (message-weighted reach) is the natural v0.3.0-C follow-on but explicitly deferred — Ideate's top-2 ranked in that exact order, and v0.3.0-B's surfaces are warm-path's prerequisites.
+- 2026-05-20 v0.3.0-B: **Messages are a third epistemic category, distinct from manual_edges and derived_edges.** Manual = asserted (confidence 1.0). Derived = inferred from shared employer (confidence < 1.0). Messages = observed communication events (frequency + recency, not a confidence-shaped quantity). Three separate query modules, three separate UI sections, three separate epistemics. Anti-mixing enforced via ISC-253 + ISC-265 grep gates — same pattern as ISC-47 / ISC-94 that govern manual-vs-derived isolation.
+- 2026-05-20 v0.3.0-B: **No new SQL migration.** The `messages` table was already populated by v0.3.0-A (1573 rows on Matt's real export). v0.3.0-B is pure read-side: new query module + UI surfaces. No schema delta; if a future warm-path slice needs materialised per-pair aggregates, that's its own migration.
+- 2026-05-20 v0.3.0-B: **Owner-perspective `sent`/`received` definition.** Sent = `fromPersonId == owner`, received = `toPersonId == owner`. This means the per-person stats are asymmetric reflections of the owner's own messaging behaviour: "I sent X 12 messages, X sent me back 8". The other-person-only count would erase agency information. Documented at the query module entry-point so future contributors don't "normalise" the directions away.
+- 2026-05-20 v0.3.0-B: **show-my-math on delegation floor (E3 soft ≥2, selected 0 sub-agents).** Forge/Anvil/Cato unavailable on this WSL host (codex CLI not installed, per the `state_cato_codex_not_installed.md` memory). Browser-verify via Playwright is inline-tool, not a subagent. Advisor will fire at the commitment-boundary before `phase: complete` — that's the cross-vendor check available within this environment. Doctrine permits the soft override with this justification.
+
+- 2026-05-20 v0.3.0-B refined (Advisor catch): **listPeople was JOINing the messages table directly — false-green on ISC-265.** First cut shipped a raw-SQL LEFT JOIN on `messages` inside `src/lib/queries/people.ts` so the sort=last_contact ORDER BY could see the per-person MAX(sent_at). ISC-265 (JS-import grep) returned 0 hits and read green, but the schema layer was leaking: another module reaching into the messages table contradicts the "third epistemic category" claim at exactly the layer that matters for evolvability. Refactor: (a) new `listAllLastContactDesc(tenantId)` on the messages module — owns the tenant-wide ordered list of contacted people; (b) `listPeople` composes that ordered list with the people set in JS for sort=last_contact (3 queries total, no per-row work); sort=name keeps the existing select + `listLastContactByPeople` batch (3 queries). (c) New ISC-266 — extended grep that fails on `(FROM|JOIN|INTO|UPDATE)\s+messages\b` outside `src/lib/queries/messages.ts`, `src/lib/linkedin/ingest.ts`, and the db/scripts/tests whitelist. 0 hits at commit. **Pattern: a JS-import-only isolation grep is necessary but not sufficient. For any "epistemic category" boundary, add a SQL-reference grep alongside; cheap to write, catches the leak that copy-paste-from-another-module is most likely to introduce.**
+
+- 2026-05-20 v0.3.0-B refined (Advisor catch): **Empty-message stats row renders zeros, not absence.** First cut hid the stats row when `total === 0` and rendered only "No messages exchanged with this person." Advisor flagged that this conflates "we checked, there were none" with "we don't track messages on this view" — the third-epistemic-category architecture exists precisely to make that distinction legible. Fix: stats row (`data-testid="messages-stats"`) always renders; sent/received show "0", last-contact shows "—"; the thread list is the conditional element. Captured as ISC-267. **Pattern: in a multi-category UI, the category's presence at the surface is itself signal. Don't hide categories on empty data — show the zero and let the user read it.**
+
 ## Changelog
 
 - 2026-05-19 (v0.2.0) — **The v0.1.x light palette was data-blind; "post-release polish" turned into a full design-system rebuild**
@@ -536,6 +603,12 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
   - **Refuted by:** Real-data browser-verify of /companies — nearly every row showed "0 people" because `positions` rows are only created for the owner (12 rows), not for the 1796 connections (whose employers live as text in Connections.csv with no corresponding positions row).
   - **Learned:** Making the companies browse useful requires *some* link from connections to companies in the schema. The cleanest fix is to synthesise a single `positions` row per connection at ingest time — title from `c.position`, company from `c.company`, current=true, dates=null.
   - **Criterion now:** No new ISC yet — the existing ISC-54 ("renders one row per company with count of people from your network") is technically satisfied but semantically thin. Captured in Decisions as a W4 prerequisite; promote to an ISC when the synthesised-positions feature is built.
+
+- 2026-05-20 (v0.3.0-B) — **JS-import-grep isolation is a fence, not a wall — the schema-access layer is where epistemic-category boundaries actually have to hold**
+  - **Conjectured:** ISC-265 (`grep -rn 'from "@/lib/queries/messages"' src/lib/queries/{manualEdges,derivedEdges}.ts` returns 0 hits) is a sufficient enforcement that messages stay separate from manual_edges / derived_edges — the same shape that successfully governs the manual-vs-derived boundary in W3/W4. Therefore the listPeople sort=last_contact branch can JOIN the messages table inline as long as no JS module imports the messages query module, because the boundary is about epistemic category and the JS-import grep is its mechanical proxy.
+  - **Refuted by:** Advisor commitment-boundary call after BUILD. The JS-import grep IS catching the import surface, but it is NOT catching `JOIN messages`, `FROM messages`, `INTO messages`, or `UPDATE messages` inside SQL strings in modules outside the messages module. listPeople's raw-SQL LEFT JOIN on the messages table read green under ISC-265 while substantively contradicting the third-epistemic-category claim at the layer that matters most for evolvability — the schema-access layer is exactly where copy-paste from another module is most likely to introduce the same leak again ("oh, you can just JOIN messages from anywhere").
+  - **Learned:** A JS-import-isolation grep is necessary but not sufficient for any "epistemic category" boundary. For each such boundary, add a parallel SQL-reference grep with the same whitelist shape. The cost is one ISC and one rg invocation; the payoff is catching the precise failure mode that a successful pattern naturalises — once "manual vs derived" works as a JS-import boundary in W3/W4, the temptation to handle a new category the same way is overwhelming, and the next slice will silently reach into the new table from somewhere it shouldn't. **Pattern: when promoting a successful isolation pattern to a new boundary, also promote the enforcement primitive to cover the layers the original primitive didn't.** Owner perspective applies to all future epistemic categories (messages now; whatever comes after warm-path next).
+  - **Criterion now:** ISC-266 added — `rg -nE '(FROM|JOIN|INTO|UPDATE)\s+messages\b' src/ --glob '!src/lib/queries/messages.ts' --glob '!src/lib/linkedin/ingest.ts' --glob '!src/lib/db/**' --glob '!scripts/**' --glob '!**/*.test.ts'` returns 0 hits. listPeople refactored to compose `listAllLastContactDesc` + people set in JS for sort=last_contact; `listLastContactByPeople` + people set for sort=name. Same isolation pattern should be promoted alongside any new epistemic category (the v0.3.0-C warm-path slice will need to follow this — its query module owns the SQL, listPeople / reach / etc compose at the module boundary).
 
 ## Verification
 
@@ -630,3 +703,13 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-237: `inserted` (1573) ≥ 80% of (`parsed` − `skipped_no_person`) (1555). Actual: 1573 / 1555 = 101%. PASSED.
 - v0.3.0-A regression: `bun run typecheck` clean; pre-existing test count went 6 → 16 (10 new messages tests); existing `parse.test.ts` real-export round-trip (`ISC-1..10`) still passes against Basic export. No verify-w6 regression — `data-stat` cells unchanged; the change is purely in `src/lib/linkedin/` + `src/lib/db/schema.ts` use, not in the graph rendering path.
 - Cato (E3 cross-vendor audit, v0.3.0-A): `skipped` — codex CLI still not installed (same gap noted W4..v0.2.0-C). Advisor (commitment-boundary, Rule 2) **invoked and produced a real catch**: same-second deterministic-ID collision risk on rapid-fire same-pair messages. Refinement landed as `contentHash` element in the ID tuple. Empirical impact: 3 actual messages recovered (1570 → 1573). Other Advisor items: owner-name-collision (deferred to W8 multi-tenant), 1st-degree-only as selection bias (documented in Decisions; deferred as posture-not-bug).
+
+- ISC-242..247 (v0.3.0-B messages query module): `bun test src/lib/queries/messages.test.ts` — 9 pass / 0 fail / 346 expect() calls. Top contact David Bruna Arrizurieta (105 messages: 40 sent + 65 received), stats `{firstAt: 2018-11-12, lastAt: 2019-04-25}`, single SQL round-trip verified by tracing libsql output. Empty-person case returns `{sent:0, received:0, total:0, firstAt:null, lastAt:null}` (ISC-247). Batch `listLastContactByPeople([topId, "no-such"])` returns Map size 1. Thread items have only `{id, direction, sentAt}` keys — no content/subject leak (ISC-244).
+- ISC-248..253, ISC-267 (person-detail Messages section): `bun run scripts/verify-v030b.ts` — 17/17 pass. Section present, stats render with non-zero counts (40/65/last-2019-04-25) for the top contact, thread renders 20 rows with both `data-direction="sent"` (6) and `data-direction="received"` (14). Empty state: Álvaro Aguilar Arriazu (0 messages) renders `messages-empty` element AND the stats row still renders with sent=0/received=0/last=— (ISC-267). Screenshot at `/tmp/strand-verify-v030b/person-detail.png`.
+- ISC-254..259 (people list): default render shows 6 last-contact cells on page 1 (most rows lack messages, expected); sort=last_contact renders 50 cells with top date 2026-05-06 (Ruben Gonzalez Wong); active chip = "Last contact". `?sort=garbage` returns 200 (fallback to default ordering — ISC-257). Screenshot at `/tmp/strand-verify-v030b/people-sort-last-contact.png`.
+- ISC-260..261: same `bun test src/lib/queries/messages.test.ts` run as above. Top-contact assertion (≥10 total, sent>0, received>0) passes — David Bruna Arrizurieta is the real two-way correspondent (105 / 40 / 65).
+- ISC-262, ISC-264: full Playwright probe captured 0 `pageerror` and 0 non-localhost requests across `/people/[id]` (2 different people), `/people`, `/people?sort=last_contact`, `/people?sort=garbage`.
+- ISC-263: `bun run typecheck` → clean (no new TS errors).
+- ISC-265: `grep -rn 'from "@/lib/queries/messages"' src/lib/queries/manualEdges.ts src/lib/queries/derivedEdges.ts` → 0 hits.
+- ISC-266 (Advisor catch — extended SQL-reference grep): `grep -rnE '(FROM|JOIN|INTO|UPDATE)[[:space:]]+messages\b' src/ | grep -vE "(src/lib/queries/messages\.(ts|test\.ts)|src/lib/linkedin/ingest\.ts|src/lib/db/)"` → 0 hits. The first cut had 1 hit (raw LEFT JOIN in people.ts listPeople sort=last_contact path); the refactor through `listAllLastContactDesc` closed the leak. Pre-refactor state: 1 hit. Post-refactor state: 0 hits.
+- Advisor (E3 commitment-boundary, v0.3.0-B): **invoked and produced two real catches** — (1) listPeople was JOINing messages directly while ISC-265 read green (false-positive on epistemic isolation); (2) hiding the stats row on empty conflated "checked, none" with "not tracked here". Both landed as ISA refactor + new ISCs (266, 267). Cato (cross-vendor): `skipped` — codex CLI gap, same as prior slices.

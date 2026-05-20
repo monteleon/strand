@@ -1,6 +1,12 @@
 import { and, eq, like, ne, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { PAGE_SIZE, pageWindow, type PageParams } from "@/lib/pagination";
+import {
+  listAllLastContactDesc,
+  listLastContactByPeople,
+} from "@/lib/queries/messages";
+
+export type PeopleSort = "name" | "last_contact";
 
 export type PeoplePageRow = {
   id: string;
@@ -8,6 +14,7 @@ export type PeoplePageRow = {
   headline: string | null;
   linkedinUrl: string | null;
   connectedAt: string | null;
+  lastContactAt: Date | null;
 };
 
 export async function getOwnerId(tenantId: string = LOCAL_TENANT_ID) {
@@ -34,13 +41,21 @@ function baseWhere(tenantId: string, ownerId: string | null, q: string) {
   return and(tenantFilter, excludeOwner, search);
 }
 
+// ISC-257: unknown sort values fall back to default. Whitelist-narrowing
+// happens here so callers can pass searchParams.sort directly without
+// pre-validation.
+export function coerceSort(raw: string | undefined): PeopleSort {
+  return raw === "last_contact" ? "last_contact" : "name";
+}
+
 export async function listPeople(
   params: PageParams,
+  sort: PeopleSort = "name",
   tenantId: string = LOCAL_TENANT_ID,
 ): Promise<{ rows: PeoplePageRow[]; total: number; totalPages: number; hasNext: boolean; hasPrev: boolean }> {
   const ownerId = await getOwnerId(tenantId);
-  const where = baseWhere(tenantId, ownerId, params.q);
 
+  const where = baseWhere(tenantId, ownerId, params.q);
   const totalRow = await db
     .select({ n: sql<number>`count(*)` })
     .from(schema.people)
@@ -48,8 +63,58 @@ export async function listPeople(
   const total = Number(totalRow[0]?.n ?? 0);
   const { offset, totalPages, hasNext, hasPrev } = pageWindow(params.page, total);
 
-  // Join with connections so we surface the connected_at date.
-  const rows = await db
+  // sort=name path (default): existing people+connections select for the
+  // visible page only, then batch-load last-contact via the messages
+  // module. Two queries here, plus one batched messages query = 3 total.
+  // No per-row queries.
+  if (sort === "name") {
+    const pageRows = await db
+      .select({
+        id: schema.people.id,
+        fullName: schema.people.fullName,
+        headline: schema.people.headline,
+        linkedinUrl: schema.people.linkedinUrl,
+        connectedAt: schema.connections.connectedAt,
+      })
+      .from(schema.people)
+      .leftJoin(
+        schema.connections,
+        and(
+          eq(schema.connections.tenantId, tenantId),
+          eq(schema.connections.toPersonId, schema.people.id),
+        ),
+      )
+      .where(where)
+      .orderBy(schema.people.fullName)
+      .limit(PAGE_SIZE)
+      .offset(offset);
+
+    const lastByPerson = await listLastContactByPeople(
+      pageRows.map((r) => r.id),
+      tenantId,
+    );
+    const rows: PeoplePageRow[] = pageRows.map((r) => ({
+      id: r.id,
+      fullName: r.fullName,
+      headline: r.headline,
+      linkedinUrl: r.linkedinUrl,
+      connectedAt: r.connectedAt,
+      lastContactAt: lastByPerson.get(r.id) ?? null,
+    }));
+    return { rows, total, totalPages, hasNext, hasPrev };
+  }
+
+  // sort=last_contact path: composite ordering across two modules. The
+  // messages module owns the "ordered list of contacted people" half;
+  // the people module owns the alphabetical tail of "people with no
+  // messages". Compose in JS to keep the module boundary clean — ISC-266
+  // enforces that the messages table is not referenced from this module
+  // at the SQL layer.
+  //
+  // Three queries here (count above + people-set + messages-ordered = 3),
+  // composed in O(P + M) JS where P = matching people (~1.8k) and
+  // M = people-with-messages (~few hundred).
+  const allPeople = await db
     .select({
       id: schema.people.id,
       fullName: schema.people.fullName,
@@ -66,10 +131,37 @@ export async function listPeople(
       ),
     )
     .where(where)
-    .orderBy(schema.people.fullName)
-    .limit(PAGE_SIZE)
-    .offset(offset);
+    .orderBy(schema.people.fullName);
 
+  const orderedContacted = await listAllLastContactDesc(tenantId);
+  const lastByPerson = new Map(
+    orderedContacted.map((o) => [o.personId, o.lastAt] as const),
+  );
+  const eligibleIds = new Set(allPeople.map((p) => p.id));
+
+  // Front: people-with-messages, in messages-module-supplied order, filtered
+  // to the eligible (q-matched, owner-excluded) set.
+  const front: typeof allPeople = [];
+  for (const o of orderedContacted) {
+    if (!eligibleIds.has(o.personId)) continue;
+    const person = allPeople.find((p) => p.id === o.personId);
+    if (person) front.push(person);
+  }
+  // Back: people in the eligible set NOT in front, alphabetical (already
+  // sorted by the SELECT's ORDER BY).
+  const frontIds = new Set(front.map((p) => p.id));
+  const back = allPeople.filter((p) => !frontIds.has(p.id));
+  const composed = [...front, ...back];
+
+  const pageRows = composed.slice(offset, offset + PAGE_SIZE);
+  const rows: PeoplePageRow[] = pageRows.map((r) => ({
+    id: r.id,
+    fullName: r.fullName,
+    headline: r.headline,
+    linkedinUrl: r.linkedinUrl,
+    connectedAt: r.connectedAt,
+    lastContactAt: lastByPerson.get(r.id) ?? null,
+  }));
   return { rows, total, totalPages, hasNext, hasPrev };
 }
 
