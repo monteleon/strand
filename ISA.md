@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.2.0-C — min-degree filter + global nav progress + per-route loading
-slug: v0.2.0-c-min-degree-nav-progress
+current_task: v0.2.0 — release; edge cap + verify-w6 refresh + v0.2.0 tag
+slug: v0.2.0-release
 effort: E3
 phase: complete
-progress: 5/5
+progress: 6/6
 mode: ALGORITHM
 started: 2026-05-20
 updated: 2026-05-20
@@ -317,6 +317,15 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-219: Global `<NavProgress />` mounted in `app/layout.tsx` inside a `<Suspense>` boundary. Flashes a 2px gradient bar at the top of the viewport on click of any internal `<a>`/`<Link>`; clears when `usePathname` or `useSearchParams` updates (= navigation actually completed).
 - [x] ISC-220: Per-route `loading.tsx` skeletons for `/graph`, `/people`, `/companies` — Next 14 streams these in immediately while the server component runs, killing the blank-screen window on slow routes (notably the ~5s `/graph` SQL).
 
+**v0.2.0 — release: edge cap + verify-w6 refresh + tag** *(2026-05-20)*
+
+- [x] ISC-221: `EDGE_CAP = 500` constant in `src/lib/queries/graph.ts`; sort derived+manual edges by confidence DESC and slice to cap. Manual edges (confidence 1.0) always survive the cut.
+- [x] ISC-222: `GraphMeta.edgesTotal` populated only when the cap fires (pre-cap count > rendered count); `edgeCap` constant always surfaced. Stats grid renders "M / N" with a `title="Showing top M of N by confidence"` when capped, plain `M` otherwise.
+- [x] ISC-223: Composition correctness — when both `minConfidence` and `minDegree` are active, min-degree filters against the already-capped edge set, not the raw `edges` array; otherwise dropped-by-cap edges would silently re-appear via the cascade. Empirically: `?minConfidence=0.5&minDegree=3` returns 145 nodes / 490 surviving edges (of 500 capped / 10,317 raw).
+- [x] ISC-224: `graph-canvas.tsx` rail `<dl>` carries `data-testid="graph-stats"` and per-cell `data-stat="nodes|edges|candidates|confidence-floor|node-cap"` attributes for stable selector parsing.
+- [x] ISC-225: `scripts/verify-w6.ts` reads stats via `data-stat` cells rather than regex-against-label; the edge cell parser accepts both `M` and `M / N` formats. Suite is **11/11 pass** at the v0.2.0 tag commit, including the post-rebuild prod-mode probe.
+- [x] ISC-226: Annotated tag `v0.2.0` created locally on the commit carrying ISC-221..225. Push + GitHub release remain user actions per the W7 convention.
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -395,6 +404,8 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | graph-filters-ui *(v0.2.0-B)* | ISC-208..215 | graph-forward-dark | yes (with graph-filters-server) |
 | min-degree-filter *(v0.2.0-C)* | ISC-216..218 | graph-filters-server | yes (with nav-progress) |
 | nav-progress + loading skeletons *(v0.2.0-C)* | ISC-219..220 | graph-forward-dark | yes (with min-degree-filter) |
+| edge-cap *(v0.2.0-release)* | ISC-221..223 | graph-filters-server | no |
+| verify-w6-refresh *(v0.2.0-release)* | ISC-224..225 | edge-cap | no |
 
 ## Decisions
 
@@ -449,6 +460,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-20 v0.2.0-C: `<NavProgress />` detects navigation start by document-level click-intercept on internal anchors (capture-phase) and clears on `usePathname`/`useSearchParams` change. **Why not `router.events`:** Next 14 App Router does not expose navigation start/end hooks for client components. **Why not `useLinkStatus`:** that's Next 15. The click-intercept fallback handles `<Link>`, `<a>`, palette-injected anchors, and any third-party component that renders a link. Capture phase ensures the bar fires even if a downstream handler stops propagation.
 - 2026-05-20 v0.2.0-C: `<NavProgress />` mounted inside `<Suspense>` in `app/layout.tsx` because it calls `useSearchParams()`, which Next 14 requires to be Suspense-wrapped or the build fails with "useSearchParams() should be wrapped in a suspense boundary at page X". Fallback is `null` — the rest of the layout still SSRs cleanly.
 - 2026-05-20 v0.2.0-C: Per-route `loading.tsx` added for `/graph`, `/people`, `/companies` — Next 14's built-in suspense streaming. Skipped `/upload`, `/profile`, and `/queries/*` for now: their server work is sub-100ms and the global nav-progress bar covers them. Easy to add later if profiling surfaces a slow one.
+
+- 2026-05-20 v0.2.0-release: `EDGE_CAP = 500`. Reason: at `minConfidence=0` on the real dataset, the derived-edges fetch produces ~10,317 edges between the 150 retained nodes — 3.66 MB SSR payload, layout strain. Capping at 500-by-confidence drops payload to 219 KB (**16× reduction**) while keeping "the strongest 500 inferred relationships" visible. Trade-off: at very low confidence, the user sees only a sample of the dense employer clusters. The "M / N" badge in the stats grid surfaces this transparently rather than silently hiding edges.
+- 2026-05-20 v0.2.0-release: refined: composition order matters — cap → min-degree, not min-degree → cap. The first version of the cap had `finalEdges = edges.filter(...)` in the min-degree branch, which used the PRE-cap `edges` array and silently re-introduced dropped edges. Caught by composing `?minConfidence=0.5&minDegree=3` (showed 10,297 edges instead of ≤500). Fixed: `finalEdges = cappedEdges.filter(...)`. The cap is the floor; min-degree narrows further from there.
+- 2026-05-20 v0.2.0-release: `verify-w6.ts` now reads stats via `data-stat="<key>"` cells (one per `<dd>`) rather than regex-against-label. Survives label rewrites: "edges" cell can render as `M` or `M / N` and the parser handles both via `^\s*(\d+)/`. Same pattern can extend to /people and /companies verify scripts if their layouts change.
+- 2026-05-20 v0.2.0-release: tag `v0.2.0` created locally on the commit carrying ISC-221..225. Annotated tag message captures the seven days of work since `v0.1.0` (5/14): design-system migration (v0.2.0-A), interactive filters (v0.2.0-B), nav-progress + min-degree (v0.2.0-C), edge cap + verify refresh (v0.2.0-release). Push + GitHub release remain user actions per the established W7/W8a convention.
 
 ## Changelog
 

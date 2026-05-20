@@ -23,6 +23,13 @@ const HIGH_CONFIDENCE_FLOOR = 0.7;
 // warning. See W6 Decisions for the full reasoning.
 const EDGE_FLOOR = HIGH_CONFIDENCE_FLOOR;
 const NODE_CAP = 150;
+// EDGE_CAP exists for the same reason NODE_CAP does: at minConfidence=0.5 on
+// the real dataset, derived_edges joins produce ~9k edges between the 150
+// retained nodes — 3.66 MB SSR payload, Cytoscape layout >11s. Capping at
+// 500-by-confidence keeps the payload bounded while still letting the user
+// see "the densest 500 inferred relationships." Surfaced in GraphMeta as
+// edgesTotal vs edgesShown so the UI can disclose the cap when it kicks in.
+const EDGE_CAP = 500;
 
 export type GraphNode = {
   id: string;
@@ -45,11 +52,16 @@ export type GraphEdge = {
 
 export type GraphMeta = {
   nodeCap: number;
+  edgeCap: number;
   highConfidenceFloor: number;
   edgeFloor: number;
   candidateCount: number;
   selectedCount: number;
   totalEdges: number;
+  // `edgesTotal` is the count BEFORE the cap; `edges.length` is what shipped.
+  // When edgesTotal > edges.length, the UI surfaces "M of N" so the user
+  // knows lower-confidence edges were dropped to keep the page responsive.
+  edgesTotal?: number;
 };
 
 export type AssembledGraph = {
@@ -87,6 +99,7 @@ function emptyAssembled(minConfidence: number, candidateCount = 0): AssembledGra
     edges: [],
     meta: {
       nodeCap: NODE_CAP,
+      edgeCap: EDGE_CAP,
       highConfidenceFloor: minConfidence,
       edgeFloor: minConfidence,
       candidateCount,
@@ -285,6 +298,26 @@ export async function assembleNetworkGraph(
     bump(d.person_b);
   }
 
+  // Cap derived edges at EDGE_CAP by confidence (descending). Manual edges
+  // are confidence 1.0 (above any derived edge) so they always survive the
+  // sort, and stable-sort behaviour keeps the original order within ties.
+  // The cap fires BEFORE the min-degree filter so degree is computed against
+  // what the user will actually see.
+  const edgesTotal = edges.length;
+  let cappedEdges = edges;
+  if (edges.length > EDGE_CAP) {
+    cappedEdges = [...edges]
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, EDGE_CAP);
+    // Rebuild degree against the surviving edges so nodes and the
+    // (about-to-run) min-degree filter agree on degree.
+    degree.clear();
+    for (const e of cappedEdges) {
+      degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+      degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+    }
+  }
+
   let nodes: GraphNode[] = rawNodes.map((r) => ({
     id: r.id,
     displayName: r.full_name,
@@ -292,7 +325,7 @@ export async function assembleNetworkGraph(
     isOwner: ownerId === r.id,
     degree: degree.get(r.id) ?? 0,
   }));
-  let finalEdges = edges;
+  let finalEdges = cappedEdges;
 
   // Min-degree post-filter (NEW v0.2.0-C). Default 1 = pass-through (every
   // node with ≥1 edge is already in the candidate set). >1 drops sparse
@@ -304,7 +337,10 @@ export async function assembleNetworkGraph(
     for (const n of nodes) {
       if (n.isOwner || (degree.get(n.id) ?? 0) >= minDegree) keepIds.add(n.id);
     }
-    finalEdges = edges.filter((e) => keepIds.has(e.source) && keepIds.has(e.target));
+    // Filter against the already-capped edge set, not the raw `edges` array —
+    // otherwise the min-degree cascade would re-introduce edges the EDGE_CAP
+    // had already excluded.
+    finalEdges = cappedEdges.filter((e) => keepIds.has(e.source) && keepIds.has(e.target));
     // Recompute degree against the surviving edges so the rendered count
     // matches what the user sees.
     const newDegree = new Map<string, number>();
@@ -322,6 +358,7 @@ export async function assembleNetworkGraph(
     edges: finalEdges,
     meta: {
       nodeCap: NODE_CAP,
+      edgeCap: EDGE_CAP,
       // Reflect the active filter so the UI's "confidence floor" stat
       // matches the slider position rather than the project-default constant.
       highConfidenceFloor: minConfidence,
@@ -329,6 +366,10 @@ export async function assembleNetworkGraph(
       candidateCount: candidates.length,
       selectedCount: nodes.length,
       totalEdges: finalEdges.length,
+      // `edgesTotal` is the pre-cap count from the SQL fetch + manual edges
+      // pre-min-degree. Only surfaces when actually larger than the rendered
+      // set so the UI can show "M of N" only when the cap kicks in.
+      edgesTotal: edgesTotal > finalEdges.length ? edgesTotal : undefined,
     },
   };
 }

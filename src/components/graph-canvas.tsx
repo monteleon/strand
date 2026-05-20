@@ -148,21 +148,40 @@ export function GraphCanvas({
                 <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
                   Stats
                 </p>
-                <dl className="mt-2 grid grid-cols-2 gap-y-1 text-sm">
+                <dl
+                  data-testid="graph-stats"
+                  className="mt-2 grid grid-cols-2 gap-y-1 text-sm"
+                >
                   <dt className="text-text-secondary">nodes</dt>
-                  <dd className="text-right font-mono">{nodes.length}</dd>
+                  <dd className="text-right font-mono" data-stat="nodes">
+                    {nodes.length}
+                  </dd>
                   <dt className="text-text-secondary">edges</dt>
-                  <dd className="text-right font-mono">{edges.length}</dd>
+                  <dd
+                    className="text-right font-mono"
+                    data-stat="edges"
+                    title={
+                      meta.edgesTotal !== undefined && meta.edgesTotal > edges.length
+                        ? `Showing top ${edges.length} of ${meta.edgesTotal} by confidence`
+                        : undefined
+                    }
+                  >
+                    {meta.edgesTotal !== undefined && meta.edgesTotal > edges.length
+                      ? `${edges.length} / ${meta.edgesTotal.toLocaleString()}`
+                      : edges.length}
+                  </dd>
                   <dt className="text-text-secondary">candidates seen</dt>
-                  <dd className="text-right font-mono">
+                  <dd className="text-right font-mono" data-stat="candidates">
                     {meta.candidateCount.toLocaleString()}
                   </dd>
                   <dt className="text-text-secondary">confidence floor</dt>
-                  <dd className="text-right font-mono">
-                    {meta.highConfidenceFloor.toFixed(1)}
+                  <dd className="text-right font-mono" data-stat="confidence-floor">
+                    {meta.highConfidenceFloor.toFixed(2)}
                   </dd>
                   <dt className="text-text-secondary">node cap</dt>
-                  <dd className="text-right font-mono">{meta.nodeCap}</dd>
+                  <dd className="text-right font-mono" data-stat="node-cap">
+                    {meta.nodeCap}
+                  </dd>
                 </dl>
               </div>
 

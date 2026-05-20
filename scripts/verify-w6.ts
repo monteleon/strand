@@ -50,14 +50,20 @@ checks.push({
   detail: `container=${container} canvas=${canvas}`,
 });
 
-// Meta panel
-const metaText = (await page.locator('[data-testid="graph-meta"]').textContent()) ?? "";
-const nodeMatch = metaText.match(/(\d+)\s+(node|nodes)/);
-const edgeMatch = metaText.match(/(\d+)\s+(edge|edges)/);
-const nodeCount = nodeMatch ? Number(nodeMatch[1]) : 0;
+// Stats grid (v0.2.0-A onwards: structured DOM, not regex against a label).
+// The rail's `<dl data-testid="graph-stats">` carries one `<dd
+// data-stat="...">` per metric. Reading by data-stat survives label-copy
+// changes and renders the verify suite self-documenting again.
+await page.waitForSelector('[data-testid="graph-stats"]', { timeout: 5000 });
+const nodeText = (await page.locator('[data-stat="nodes"]').textContent()) ?? "";
+const edgeText = (await page.locator('[data-stat="edges"]').textContent()) ?? "";
+const nodeCount = parseInt(nodeText.trim(), 10) || 0;
+// Edge cell may render as "M" or "M / N" (when EDGE_CAP fires). Both forms
+// start with a leading integer that IS the rendered edge count.
+const edgeMatch = edgeText.match(/^\s*(\d+)/);
 const edgeCount = edgeMatch ? Number(edgeMatch[1]) : 0;
 checks.push({
-  name: "ISC-161 meta panel shows node + edge counts",
+  name: "ISC-161 stats grid shows node + edge counts",
   ok: nodeCount > 0 && edgeCount > 0,
   detail: `nodes=${nodeCount} edges=${edgeCount}`,
 });
