@@ -24,6 +24,7 @@ const NetworkGraph = dynamic(
 type GraphCanvasProps = AssembledGraph & {
   initialKinds: GraphEdgeKind[];
   initialMinConfidence: number;
+  initialMinDegree: number;
 };
 
 export function GraphCanvas({
@@ -32,6 +33,7 @@ export function GraphCanvas({
   meta,
   initialKinds,
   initialMinConfidence,
+  initialMinDegree,
 }: GraphCanvasProps) {
   // Selection state lives in React; URL is kept in sync via history.pushState
   // so the panel is deep-linkable and the back button steps through
@@ -76,6 +78,7 @@ export function GraphCanvas({
           <GraphFilters
             initialKinds={initialKinds}
             initialMinConfidence={initialMinConfidence}
+            initialMinDegree={initialMinDegree}
           />
           <div className="flex h-full items-center justify-center p-12 text-text-secondary">
             <div
@@ -98,6 +101,7 @@ export function GraphCanvas({
         <GraphFilters
           initialKinds={initialKinds}
           initialMinConfidence={initialMinConfidence}
+          initialMinDegree={initialMinDegree}
         />
         <NetworkGraph
           nodes={nodes}

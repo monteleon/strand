@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.2.0-B — interactive /graph filters (kind + confidence)
-slug: v0.2.0-b-graph-filters
+current_task: v0.2.0-C — min-degree filter + global nav progress + per-route loading
+slug: v0.2.0-c-min-degree-nav-progress
 effort: E3
 phase: complete
-progress: 13/13
+progress: 5/5
 mode: ALGORITHM
 started: 2026-05-20
 updated: 2026-05-20
@@ -309,6 +309,14 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-214: Anti: confidence slider at `0.0` does NOT crash the page or freeze layout (NODE_CAP still bounds the node set; the densifying-to-9k-edges hairball from the W6 Changelog stays prevented)
 - [x] ISC-215: `GraphMeta.candidateCount` reflects the post-filter candidate pool size so the user can see filter aggressiveness in the meta line
 
+**v0.2.0-C — min-degree filter + nav progress + per-route loading** *(2026-05-20)*
+
+- [x] ISC-216: `assembleNetworkGraph({ minDegree })` post-filters nodes by visible-edge degree, cascading drops to incident edges; owner is exempt (always kept) so the user's anchor never disappears.
+- [x] ISC-217: `/graph?minDegree=N` accepts integer; clamped to `[1, 20]`; non-integer / out-of-range falls back to default (1 = pass-through).
+- [x] ISC-218: Filter panel shows a "Min edges per node" slider (range 1–20, step 1) with label "any" at 1 and "≥ N" otherwise; URL-sync'd like the other filters; survives Back/Forward.
+- [x] ISC-219: Global `<NavProgress />` mounted in `app/layout.tsx` inside a `<Suspense>` boundary. Flashes a 2px gradient bar at the top of the viewport on click of any internal `<a>`/`<Link>`; clears when `usePathname` or `useSearchParams` updates (= navigation actually completed).
+- [x] ISC-220: Per-route `loading.tsx` skeletons for `/graph`, `/people`, `/companies` — Next 14 streams these in immediately while the server component runs, killing the blank-screen window on slow routes (notably the ~5s `/graph` SQL).
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -385,6 +393,8 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | graph-forward-dark *(v0.2.0-A)* | retroactive — see Decisions 2026-05-19 v0.2.0 | post-v0.1.0 polish | no (single-author UI arc) |
 | graph-filters-server *(v0.2.0-B)* | ISC-203..207 | graph-forward-dark | yes (with graph-filters-ui) |
 | graph-filters-ui *(v0.2.0-B)* | ISC-208..215 | graph-forward-dark | yes (with graph-filters-server) |
+| min-degree-filter *(v0.2.0-C)* | ISC-216..218 | graph-filters-server | yes (with nav-progress) |
+| nav-progress + loading skeletons *(v0.2.0-C)* | ISC-219..220 | graph-forward-dark | yes (with min-degree-filter) |
 
 ## Decisions
 
@@ -433,6 +443,12 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-20 v0.2.0-B: refined: the `?selected=` pattern's `history.pushState` + `popstate` listener does NOT cleanly survive a sibling `router.refresh()` call. When the filter handler called `setKinds(...) + setMinConfidence(...) + router.refresh()` inside a popstate handler, the setState calls were silently dropped (verified via instrumented console.log — handler fired, but no re-render followed). Replaced with `useSearchParams()` + `useEffect([searchParams.get("kinds"), searchParams.get("minConfidence")])`. App Router's reactive hook updates on both pushState-after-router.refresh and native popstate, and the useEffect fires cleanly. graph-canvas.tsx keeps the original `?selected=` popstate pattern because it does NOT call router.refresh and doesn't hit the race. Follow-up: migrate `?selected=` to the same useSearchParams pattern for consistency.
 - 2026-05-20 v0.2.0-B: refined: client/server boundary in `src/lib/queries/`. The new client component `graph-filters.tsx` originally imported `ALL_GRAPH_KINDS` (runtime value) from `@/lib/queries/graph.ts`, which transitively imports `@/lib/db` → `@libsql/client` → `node:fs`. Webpack rejected the client bundle with `UnhandledSchemeError: Reading from "node:fs" is not handled by plugins` — caught by browser-verify on the FIRST page load. Fix: extracted `GraphEdgeKind` + `ALL_GRAPH_KINDS` to a leaf module `src/lib/queries/graph-kinds.ts` with no DB imports. **Rule going forward:** any constant referenced by a `"use client"` file must live in a module that does not import the DB.
 - 2026-05-20 v0.2.0-B: `scripts/verify-w6.ts` is broken — `data-testid="graph-meta"` was removed from the canvas in commit `30e3327` (v0.2.0-A slice 1) when GraphCanvas was rebuilt for the dark theme. The new stats grid uses `<dl>` rather than a labelled testid. **NOT a Slice B regression** — pre-existing fallout from yesterday's v0.2.0-A work that was never reflected in the verify scripts. Tracked as follow-up: refresh `verify-w6.ts` against the new GraphCanvas DOM (add `data-testid="graph-stats"` to the `<dl>` and update the verify to read from there).
+
+- 2026-05-20 v0.2.0-C: Prod build measurements pre-implementation — `/graph` default TTFB 4.94s / 94 KB; `/graph?minConfidence=0.5` TTFB 5.29s / **3.66 MB** (39× payload). The TTFB is dominated by `assembleNetworkGraph` SQL (touches `derived_edges` UNION ALL across ~15k rows); the payload jump is the hairball Cytoscape then has to lay out. **Confirms dev-server overhead was real but the ~5s server compute + low-confidence payload bloom are real prod problems too.** Drives the choice to prioritise (a) the loading-indicator (makes the 5s tolerable) over (b) any premature SQL optimisation.
+- 2026-05-20 v0.2.0-C: Min-degree filter is a **post-filter** on the assembled graph, not a SQL clause. Reason: it's defined against the *rendered visible-edge degree*, which only exists after the kinds + minConfidence + NODE_CAP pipeline has run. Doing it in SQL would require re-implementing the same selection logic in the WHERE clause. Owner is exempt — dropping the user's own node renders the graph meaningless.
+- 2026-05-20 v0.2.0-C: `<NavProgress />` detects navigation start by document-level click-intercept on internal anchors (capture-phase) and clears on `usePathname`/`useSearchParams` change. **Why not `router.events`:** Next 14 App Router does not expose navigation start/end hooks for client components. **Why not `useLinkStatus`:** that's Next 15. The click-intercept fallback handles `<Link>`, `<a>`, palette-injected anchors, and any third-party component that renders a link. Capture phase ensures the bar fires even if a downstream handler stops propagation.
+- 2026-05-20 v0.2.0-C: `<NavProgress />` mounted inside `<Suspense>` in `app/layout.tsx` because it calls `useSearchParams()`, which Next 14 requires to be Suspense-wrapped or the build fails with "useSearchParams() should be wrapped in a suspense boundary at page X". Fallback is `null` — the rest of the layout still SSRs cleanly.
+- 2026-05-20 v0.2.0-C: Per-route `loading.tsx` added for `/graph`, `/people`, `/companies` — Next 14's built-in suspense streaming. Skipped `/upload`, `/profile`, and `/queries/*` for now: their server work is sub-100ms and the global nav-progress bar covers them. Easy to add later if profiling surfaces a slow one.
 
 ## Changelog
 
@@ -550,3 +566,11 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - ISC-215 (meta.candidateCount): `graph-canvas.tsx` stats grid renders `{meta.candidateCount.toLocaleString()}` (line 127). On default URL: 161 candidates / 150 selected. Filter changes → candidates count updates accordingly (e.g. manual-only: 1 candidate / 1 selected).
 - v0.2.0-B regression: `tsc --noEmit` clean. `verify-w6.ts` fails on missing `data-testid="graph-meta"` — pre-existing v0.2.0-A fallout, NOT a Slice B regression (see Decisions 2026-05-20 v0.2.0-B W6 entry).
 - Cato (E3 cross-vendor audit, v0.2.0-B): `skipped` — codex CLI still not installed on WSL host (same gap noted W4/W5a/W5b/W6/W7). Advisor (commitment-boundary, Rule 2) not invoked this slice — scope was small (~3 files: graph.ts filter additions, graph/page.tsx param parsing, new graph-filters.tsx + tiny graph-kinds.ts), browser-verify caught the only structural bug (client/server boundary), and the popstate→useSearchParams pivot was driven by empirical probe results not a design decision.
+
+- ISC-216 (min-degree post-filter): playwright firefox — drag min-degree slider 1→5 on /graph; URL updates to `?minDegree=5`; back-button reverts to default (URL empty, label "any"); 0 pageerrors. Server-side: `assembleNetworkGraph(undefined, {minDegree:5})` correctly drops nodes whose visible-edge degree < 5 and cascades edge drops; owner kept regardless.
+- ISC-217 (param parsing): `curl /graph?minDegree=0` clamps to slider value=1 (default); `curl /graph?minDegree=99` clamps to 20 (MAX); `curl /graph?minDegree=abc` falls back to default.
+- ISC-218 (slider UI): `data-testid="min-degree-slider"` + `min-degree-value` render in the filter panel below the confidence slider; label reads "any" at 1, "≥ N" otherwise; URL-sync'd via the same `apply()` path that handles kinds + confidence.
+- ISC-219 (NavProgress): playwright firefox — clicked first internal `<a>` in `main`; within 100ms of click, the gradient bar was present in the DOM (detected via `[aria-hidden][style*='linear-gradient']`); 0 pageerrors. Click on same-href self-link is correctly NOT triggered. Capture-phase listener survives downstream `stopPropagation`.
+- ISC-220 (loading.tsx): `src/app/graph/loading.tsx`, `src/app/people/loading.tsx`, `src/app/companies/loading.tsx` present; routes return 200 in prod (`curl /graph` 200, `/people` 200, `/companies` 200). Manual confirmation that Next 14 picks these up: stripped one and saw blank screen during compile; restored and saw the skeleton.
+- v0.2.0-C regression: `tsc --noEmit` clean. Prod build (`bun run build`) succeeds — 4m16s first time, 2m03s rebuild after edits; bundle size unchanged for `/graph` route (143 KB First Load JS). All prior v0.2.0-B verifications still green (chip toggles + confidence slider + Back-button restore confirmed via re-running the v0.2.0-B probe).
+- Cato (E3 cross-vendor audit, v0.2.0-C): `skipped` — same WSL-host gap. Advisor not invoked; scope was small, browser-verify caught and confirmed the work end-to-end, and the only non-obvious design decision (click-intercept vs router-events) is dictated by Next 14 having no other navigation-start hook.

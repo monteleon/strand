@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { LeftRail } from "@/components/left-rail";
 import { CommandPalette } from "@/components/command-palette";
+import { NavProgress } from "@/components/nav-progress";
 import "./globals.css";
 
 const inter = Inter({
@@ -30,6 +32,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="flex min-h-screen">
+        {/* useSearchParams inside NavProgress must be wrapped in Suspense
+            so the rest of the layout can still SSR cleanly. */}
+        <Suspense fallback={null}>
+          <NavProgress />
+        </Suspense>
         <LeftRail />
         <main className="min-w-0 flex-1">{children}</main>
         <CommandPalette />

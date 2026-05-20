@@ -9,6 +9,8 @@ import {
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
 const SLIDER_STEP = 0.05;
+const DEFAULT_MIN_DEGREE = 1;
+const MAX_MIN_DEGREE = 20;
 
 const KIND_LABEL: Record<GraphEdgeKind, string> = {
   manual: "Manual",
@@ -24,7 +26,12 @@ const KIND_HINT: Record<GraphEdgeKind, string> = {
   derived_no_overlap: "shared employer, non-overlapping dates",
 };
 
-function urlFor(kinds: GraphEdgeKind[], minConfidence: number, search: string): string {
+function urlFor(
+  kinds: GraphEdgeKind[],
+  minConfidence: number,
+  minDegree: number,
+  search: string,
+): string {
   const params = new URLSearchParams(search);
   // Omit defaults so the canonical `/graph` URL stays clean.
   const isDefaultKinds =
@@ -35,6 +42,9 @@ function urlFor(kinds: GraphEdgeKind[], minConfidence: number, search: string): 
 
   if (Math.abs(minConfidence - DEFAULT_MIN_CONFIDENCE) < 1e-6) params.delete("minConfidence");
   else params.set("minConfidence", minConfidence.toFixed(2));
+
+  if (minDegree <= DEFAULT_MIN_DEGREE) params.delete("minDegree");
+  else params.set("minDegree", String(minDegree));
 
   const qs = params.toString();
   return qs ? `/graph?${qs}` : "/graph";
@@ -56,12 +66,21 @@ function parseMinConfParam(raw: string | null): number | null {
   return Math.max(0, Math.min(1, n));
 }
 
+function parseMinDegreeParam(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(1, Math.min(MAX_MIN_DEGREE, n));
+}
+
 export function GraphFilters({
   initialKinds,
   initialMinConfidence,
+  initialMinDegree,
 }: {
   initialKinds: GraphEdgeKind[];
   initialMinConfidence: number;
+  initialMinDegree: number;
 }) {
   const router = useRouter();
   // useSearchParams is the App Router's reactive URL hook. It re-fires on
@@ -70,18 +89,25 @@ export function GraphFilters({
   const searchParams = useSearchParams();
   const urlKinds = parseKindsParam(searchParams.get("kinds")) ?? initialKinds;
   const urlMinConf = parseMinConfParam(searchParams.get("minConfidence")) ?? initialMinConfidence;
+  const urlMinDeg = parseMinDegreeParam(searchParams.get("minDegree")) ?? initialMinDegree;
   const [kinds, setKinds] = useState<GraphEdgeKind[]>(urlKinds);
   const [minConfidence, setMinConfidence] = useState<number>(urlMinConf);
+  const [minDegree, setMinDegree] = useState<number>(urlMinDeg);
 
   // Keep local state in sync with URL — fires on Back/Forward navigation
   // (App Router updates searchParams on popstate) and on any router.refresh.
   useEffect(() => {
     setKinds(urlKinds);
     setMinConfidence(urlMinConf);
-    // urlKinds / urlMinConf are derived; tracking the underlying string keys
-    // is what matters — they only change when the URL changes.
+    setMinDegree(urlMinDeg);
+    // urlKinds / urlMinConf / urlMinDeg are derived; tracking the underlying
+    // string keys is what matters — they only change when the URL changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams.get("kinds"), searchParams.get("minConfidence")]);
+  }, [
+    searchParams.get("kinds"),
+    searchParams.get("minConfidence"),
+    searchParams.get("minDegree"),
+  ]);
 
   // Single canonical URL writer. Same pattern as `?selected=` in
   // graph-canvas.tsx — history.pushState + router.refresh — because
@@ -89,8 +115,8 @@ export function GraphFilters({
   // on the same pathname in this app. Documented in ISA Decisions
   // (2026-05-19 v0.2.0 graph URL pattern).
   const apply = useCallback(
-    (nextKinds: GraphEdgeKind[], nextMinConf: number) => {
-      const url = urlFor(nextKinds, nextMinConf, window.location.search);
+    (nextKinds: GraphEdgeKind[], nextMinConf: number, nextMinDeg: number) => {
+      const url = urlFor(nextKinds, nextMinConf, nextMinDeg, window.location.search);
       const current = window.location.pathname + window.location.search;
       if (url !== current) {
         window.history.pushState(null, "", url);
@@ -100,7 +126,6 @@ export function GraphFilters({
     [router],
   );
 
-
   const toggleKind = useCallback(
     (kind: GraphEdgeKind) => {
       const isOn = kinds.includes(kind);
@@ -109,9 +134,9 @@ export function GraphFilters({
       // when this is the only selection are no-ops.
       if (next.length === 0) return;
       setKinds(next);
-      apply(next, minConfidence);
+      apply(next, minConfidence, minDegree);
     },
-    [kinds, minConfidence, apply],
+    [kinds, minConfidence, minDegree, apply],
   );
 
   const onSliderChange = useCallback(
@@ -119,9 +144,20 @@ export function GraphFilters({
       const next = parseFloat(e.target.value);
       if (!Number.isFinite(next)) return;
       setMinConfidence(next);
-      apply(kinds, next);
+      apply(kinds, next, minDegree);
     },
-    [kinds, apply],
+    [kinds, minDegree, apply],
+  );
+
+  const onMinDegreeChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const next = parseInt(e.target.value, 10);
+      if (!Number.isFinite(next)) return;
+      const clamped = Math.max(1, Math.min(MAX_MIN_DEGREE, next));
+      setMinDegree(clamped);
+      apply(kinds, minConfidence, clamped);
+    },
+    [kinds, minConfidence, apply],
   );
 
   return (
@@ -195,6 +231,37 @@ export function GraphFilters({
           <span>0.5</span>
           <span>1.0</span>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-text-secondary">Min edges per node</span>
+          <span
+            className="font-mono text-text-primary"
+            data-testid="min-degree-value"
+          >
+            {minDegree === 1 ? "any" : `≥ ${minDegree}`}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={1}
+          max={MAX_MIN_DEGREE}
+          step={1}
+          value={minDegree}
+          onChange={onMinDegreeChange}
+          aria-label="Minimum edges per node"
+          data-testid="min-degree-slider"
+          className="mt-2 w-full accent-accent-signal"
+        />
+        <div className="mt-1 flex justify-between font-mono text-[10px] text-text-tertiary">
+          <span>1</span>
+          <span>{Math.round(MAX_MIN_DEGREE / 2)}</span>
+          <span>{MAX_MIN_DEGREE}</span>
+        </div>
+        <p className="mt-1 text-[11px] leading-snug text-text-tertiary">
+          Hide leaf nodes — show only people connected to ≥ N others.
+        </p>
       </div>
     </div>
   );

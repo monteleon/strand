@@ -9,6 +9,8 @@ import {
 export const dynamic = "force-dynamic";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
+const DEFAULT_MIN_DEGREE = 1;
+const MAX_MIN_DEGREE = 20;
 
 function parseKinds(raw: string | string[] | undefined): GraphEdgeKind[] | undefined {
   if (!raw) return undefined;
@@ -31,6 +33,14 @@ function parseMinConfidence(raw: string | string[] | undefined): number | undefi
   return Math.max(0, Math.min(1, n));
 }
 
+function parseMinDegree(raw: string | string[] | undefined): number | undefined {
+  if (!raw) return undefined;
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  const n = parseInt(s, 10);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(1, Math.min(MAX_MIN_DEGREE, n));
+}
+
 export default async function GraphPage({
   searchParams,
 }: {
@@ -38,7 +48,8 @@ export default async function GraphPage({
 }) {
   const kinds = parseKinds(searchParams.kinds);
   const minConfidence = parseMinConfidence(searchParams.minConfidence);
-  const data = await assembleNetworkGraph(undefined, { kinds, minConfidence });
+  const minDegree = parseMinDegree(searchParams.minDegree);
+  const data = await assembleNetworkGraph(undefined, { kinds, minConfidence, minDegree });
 
   return (
     <Suspense fallback={null}>
@@ -48,6 +59,7 @@ export default async function GraphPage({
         meta={data.meta}
         initialKinds={kinds ?? ALL_GRAPH_KINDS}
         initialMinConfidence={minConfidence ?? DEFAULT_MIN_CONFIDENCE}
+        initialMinDegree={minDegree ?? DEFAULT_MIN_DEGREE}
       />
     </Suspense>
   );

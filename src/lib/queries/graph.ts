@@ -64,6 +64,11 @@ export type AssembledGraph = {
 export type GraphFilters = {
   kinds?: GraphEdgeKind[];   // default: all four kinds
   minConfidence?: number;    // default: HIGH_CONFIDENCE_FLOOR (0.7)
+  // Post-filter: drop any non-owner node with visible-edge degree below this
+  // threshold (and the edges incident to it). Defaults to 1 (= no filter).
+  // Owner is always retained even if their degree would otherwise be 0 —
+  // dropping the user's own node would render the graph meaningless.
+  minDegree?: number;
 };
 
 // UI kind → DB kind for the `derived_edges.kind` enum.
@@ -280,17 +285,41 @@ export async function assembleNetworkGraph(
     bump(d.person_b);
   }
 
-  const nodes: GraphNode[] = rawNodes.map((r) => ({
+  let nodes: GraphNode[] = rawNodes.map((r) => ({
     id: r.id,
     displayName: r.full_name,
     company: r.company_name,
     isOwner: ownerId === r.id,
     degree: degree.get(r.id) ?? 0,
   }));
+  let finalEdges = edges;
+
+  // Min-degree post-filter (NEW v0.2.0-C). Default 1 = pass-through (every
+  // node with ≥1 edge is already in the candidate set). >1 drops sparse
+  // nodes + cascades the drop to their incident edges, in a single pass:
+  // the owner is exempt (always kept) so the user's anchor never disappears.
+  const minDegree = filters.minDegree ?? 1;
+  if (minDegree > 1) {
+    const keepIds = new Set<string>();
+    for (const n of nodes) {
+      if (n.isOwner || (degree.get(n.id) ?? 0) >= minDegree) keepIds.add(n.id);
+    }
+    finalEdges = edges.filter((e) => keepIds.has(e.source) && keepIds.has(e.target));
+    // Recompute degree against the surviving edges so the rendered count
+    // matches what the user sees.
+    const newDegree = new Map<string, number>();
+    for (const e of finalEdges) {
+      newDegree.set(e.source, (newDegree.get(e.source) ?? 0) + 1);
+      newDegree.set(e.target, (newDegree.get(e.target) ?? 0) + 1);
+    }
+    nodes = nodes
+      .filter((n) => keepIds.has(n.id))
+      .map((n) => ({ ...n, degree: newDegree.get(n.id) ?? 0 }));
+  }
 
   return {
     nodes,
-    edges,
+    edges: finalEdges,
     meta: {
       nodeCap: NODE_CAP,
       // Reflect the active filter so the UI's "confidence floor" stat
@@ -298,8 +327,8 @@ export async function assembleNetworkGraph(
       highConfidenceFloor: minConfidence,
       edgeFloor: minConfidence,
       candidateCount: candidates.length,
-      selectedCount: selectedIds.size,
-      totalEdges: edges.length,
+      selectedCount: nodes.length,
+      totalEdges: finalEdges.length,
     },
   };
 }
