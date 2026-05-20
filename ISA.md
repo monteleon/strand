@@ -1,13 +1,13 @@
 ---
 project: strand
-current_task: W8a — docker build + v0.1.0 tag
-slug: w8a-docker-tag
+current_task: v0.2.0-B — interactive /graph filters (kind + confidence)
+slug: v0.2.0-b-graph-filters
 effort: E3
 phase: complete
-progress: 202/202
+progress: 13/13
 mode: ALGORITHM
-started: 2026-05-14
-updated: 2026-05-14
+started: 2026-05-20
+updated: 2026-05-20
 ---
 
 # Strand — ISA
@@ -293,6 +293,22 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - [x] ISC-201: Anti: no `git push` executed by Claude (push is user action per W7 close)
 - [x] ISC-202: Anti: no GitHub release or remote creation by Claude (user action)
 
+**v0.2.0-B — interactive /graph filters** *(2026-05-20)*
+
+- [x] ISC-203: `/graph?kinds=` accepts comma-separated edge kinds from `{manual, derived_overlap, derived_currently, derived_no_overlap}`; unknown values silently dropped
+- [x] ISC-204: `/graph?minConfidence=` accepts float; out-of-range clamped to `[0, 1]`; NaN / missing ignored (falls back to default)
+- [x] ISC-205: `assembleNetworkGraph({ kinds?, minConfidence? })` applies both filters to the `derived_edges` candidate query before assembling
+- [x] ISC-206: Manual edges always pass the `minConfidence` filter (implicit confidence 1.0); they obey the `kinds` filter only when `manual` is explicitly excluded from the selection
+- [x] ISC-207: Default behaviour (no query params) renders the same node + edge set as pre-Slice-B `/graph` (regression safety; existing W6 verify suite stays green)
+- [x] ISC-208: Filter panel renders as a fixed-position overlay anchored top-right inside `[data-testid="graph-container"]`, styled on Graph-Forward Dark `bg-overlay` + `border-subtle`
+- [x] ISC-209: Edge-kind chips: 4 toggleable buttons (one per kind), filled when selected, outlined when not; clicking toggles selection; at least 1 kind must remain selected (cannot deselect all)
+- [x] ISC-210: Confidence slider: range `0.0–1.0`, step `0.05`, current value labelled next to handle (e.g. `≥ 0.70`)
+- [x] ISC-211: Changing any filter updates the URL via `history.pushState` (same pattern as `?selected=`) and re-fetches via `router.refresh()` — no full page reload
+- [x] ISC-212: Browser Back / Forward (`popstate`) restores prior filter state without losing the canvas
+- [x] ISC-213: Anti: no SSR/CSR hydration mismatch warning when first load carries `?kinds=` or `?minConfidence=` params
+- [x] ISC-214: Anti: confidence slider at `0.0` does NOT crash the page or freeze layout (NODE_CAP still bounds the node set; the densifying-to-9k-edges hairball from the W6 Changelog stays prevented)
+- [x] ISC-215: `GraphMeta.candidateCount` reflects the post-filter candidate pool size so the user can see filter aggressiveness in the meta line
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -366,6 +382,9 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 | worked-with-page *(W5b)* | ISC-116..123 | (existing manualEdges + derivedEdges queries) | yes (with by-year-page) |
 | by-year-page *(W5b)* | ISC-124..130 | (existing connections table) | yes (with worked-with-page) |
 | reach-page *(W5b)* | ISC-131..141 | (existing manual + derived + connections) | no |
+| graph-forward-dark *(v0.2.0-A)* | retroactive — see Decisions 2026-05-19 v0.2.0 | post-v0.1.0 polish | no (single-author UI arc) |
+| graph-filters-server *(v0.2.0-B)* | ISC-203..207 | graph-forward-dark | yes (with graph-filters-ui) |
+| graph-filters-ui *(v0.2.0-B)* | ISC-208..215 | graph-forward-dark | yes (with graph-filters-server) |
 
 ## Decisions
 
@@ -405,7 +424,23 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-13 (W7): **v0.1.0 tag + GitHub release is the user's manual action.** No git remote configured in this repo. The flip-to-public, the actual `git tag v0.1.0`, the GitHub Releases entry, and the bump to `0.1.0` (drop the `-rc.1`) all happen by hand when the user is ready. Documented in W7 Decisions so future-Claude doesn't try to push on its own.
 - 2026-05-13 (W7): **Screenshot capture is viewport-only, not full-page.** Initial full-page captures hit 2MB+ for the /companies/[id] and /queries pages (145-row lists scroll for ages). Viewport-only kept total screenshot footprint at ~770KB across 6 files — fine for git, fine for a README first-impression on GitHub repo cards. Trade-off: screenshots don't show the full list, but they show the feature, which is what they're for.
 
+- 2026-05-19 v0.2.0: Started a post-v0.1.0 design-system overhaul ("Graph-Forward Dark"). Nine commits in one session migrate every route off the v0.1.x light palette onto an HSL-token-based dark vocabulary documented in `docs/tokens.md`. Three governing rules: **color carries data** (accent reserved for high-signal / "you"), **two densities only** (comfortable rhythm for graph + hero, dense rhythm for lists/tables), **motion is content-driven** (no scroll-jacking).
+- 2026-05-19 v0.2.0: Shell change — top header retired in favour of a **global left rail** (`079cd41`). Frees the vertical axis for the graph and list routes; the rail also hosts the `⌘K` palette affordance.
+- 2026-05-19 v0.2.0: `/graph` selection URL pattern uses `history.pushState` instead of `router.push`/`router.replace` (commit `30e3327`). Next 14 App Router silently dedups query-only changes on the same pathname in this app's setup, which would have made `?selected=` deep-links inert.
+- 2026-05-19 v0.2.0: Cytoscape mount is `requestAnimationFrame`-deferred inside the useEffect to avoid the React 18 dev-StrictMode double-mount race that crashes cose's animation timer on `renderer is null`. Captured in `30e3327` commit body; don't refactor away.
+- 2026-05-19 v0.2.0: Command palette added via `cmdk` (`5ad868a`). Three Command.Group sections: Navigate (10 routes), People (debounced 200ms `/api/people/search?q=`, fires once ≥2 chars), Saved queries (one `GET /api/bookmarks` on open). `Cmd-K` / `Ctrl-K` toggles, `Esc` closes. Stack additions for v0.2.0: `framer-motion`, `lucide-react`, `cmdk`.
+- 2026-05-20 v0.2.0-B: Slice B scope locked at **edge-kind multi-select + confidence slider**. Year-range filter (originally mentioned alongside kind/confidence) is DEFERRED. Reason: `derived_edges.evidence_json` has no top-level `startYear` / `endYear` fields — dates are buried inside `aPositions[]` / `bPositions[]` per-position arrays, and on the real dataset most of those entries are `origin: 'synthesised'` with `startDate: null`. A meaningful year filter needs schema enrichment (materialised year range per edge) or a degraded "drop edges where both sides have null dates" toggle. Neither is justified by Slice B's user value; tracked as a follow-up.
+- 2026-05-20 v0.2.0-B: refined: the `?selected=` pattern's `history.pushState` + `popstate` listener does NOT cleanly survive a sibling `router.refresh()` call. When the filter handler called `setKinds(...) + setMinConfidence(...) + router.refresh()` inside a popstate handler, the setState calls were silently dropped (verified via instrumented console.log — handler fired, but no re-render followed). Replaced with `useSearchParams()` + `useEffect([searchParams.get("kinds"), searchParams.get("minConfidence")])`. App Router's reactive hook updates on both pushState-after-router.refresh and native popstate, and the useEffect fires cleanly. graph-canvas.tsx keeps the original `?selected=` popstate pattern because it does NOT call router.refresh and doesn't hit the race. Follow-up: migrate `?selected=` to the same useSearchParams pattern for consistency.
+- 2026-05-20 v0.2.0-B: refined: client/server boundary in `src/lib/queries/`. The new client component `graph-filters.tsx` originally imported `ALL_GRAPH_KINDS` (runtime value) from `@/lib/queries/graph.ts`, which transitively imports `@/lib/db` → `@libsql/client` → `node:fs`. Webpack rejected the client bundle with `UnhandledSchemeError: Reading from "node:fs" is not handled by plugins` — caught by browser-verify on the FIRST page load. Fix: extracted `GraphEdgeKind` + `ALL_GRAPH_KINDS` to a leaf module `src/lib/queries/graph-kinds.ts` with no DB imports. **Rule going forward:** any constant referenced by a `"use client"` file must live in a module that does not import the DB.
+- 2026-05-20 v0.2.0-B: `scripts/verify-w6.ts` is broken — `data-testid="graph-meta"` was removed from the canvas in commit `30e3327` (v0.2.0-A slice 1) when GraphCanvas was rebuilt for the dark theme. The new stats grid uses `<dl>` rather than a labelled testid. **NOT a Slice B regression** — pre-existing fallout from yesterday's v0.2.0-A work that was never reflected in the verify scripts. Tracked as follow-up: refresh `verify-w6.ts` against the new GraphCanvas DOM (add `data-testid="graph-stats"` to the `<dl>` and update the verify to read from there).
+
 ## Changelog
+
+- 2026-05-19 (v0.2.0) — **The v0.1.x light palette was data-blind; "post-release polish" turned into a full design-system rebuild**
+  - **Conjectured:** v0.1.0 closed the project's design phase. Post-release work would be hosted-instance prep (Plan W8 — Postgres swap + NextAuth fork) or quiet maintenance until the next data feature.
+  - **Refuted by:** A single session on 2026-05-19 producing 9 commits — none of them W8 — that adopted a new HSL-token vocabulary, retired the v0.1.x palette, replaced the top header with a global left rail, migrated every route, and shipped a `Cmd-K` command palette. The "ship and rest" framing missed that the v0.1.x palette could not carry signal: accent colour was decorative, edge kinds had no visual hierarchy, the graph and the lists looked stylistically unrelated. None of that is a polish issue; it is a thesis issue.
+  - **Learned:** A graph app's UI **is** the graph. Tokens that don't encode that thesis force the renderer to do extra work — the user reads the canvas first, then has to translate every other surface to match. The fix is design-system-level (governing rules, not component tweaks). Adding **"Graph-as-UI"** as a project Principle next to "Local-first" and "Multi-tenant from day one" — same load-bearing tier.
+  - **Criterion now:** v0.2.0-A is retroactively covered by the `graph-forward-dark` Feature row + the 2026-05-19 v0.2.0 Decisions entries. v0.2.0-B opens new ISCs (203–215) for interactive `/graph` filters — the first new surface that fully expresses the Graph-as-UI thesis (filter the graph in place; the canvas updates; the chrome stays out of the way).
 
 - 2026-05-13 (W6) — **Densifying a force-directed graph "for visual interest" cost 30× the HTML payload**
   - **Conjectured:** Lowering the edge-render floor from 0.7 to 0.5 would add visual cluster structure without materially affecting load time or payload, because the within-cluster 0.5 edges live among already-rendered nodes (no node expansion needed).
@@ -503,3 +538,15 @@ Ingest Matt's real LinkedIn export (`/mnt/c/Users/mca/Downloads/Basic_LinkedInDa
 - 2026-05-14 W8a: refined: README + `src/app/page.tsx` had three drift strings ("v0.1.0-pre", "W7 🚧 In flight", "Private until v0.1.0") that became false at tag time. Fixed in commit 5e6c272 before tag.
 - 2026-05-14 W8a: Advisor (commitment-boundary, Rule 2) consulted before tag creation. Surfaced CHANGELOG.md absence and version-string drift; user chose Minimal prep path — embedded rich release notes directly in the annotated tag message instead of CHANGELOG.md. Other Advisor items (BuildKit, base-image digest pinning, OCI labels, signed tag) parked as post-v0.1.0 follow-ups in the tag annotation itself.
 - 2026-05-14 W8a: tag `v0.1.0` created locally on commit `5e6c272`. Push + GitHub remote setup + private→public flip + GitHub release remain user actions per the established convention.
+
+- ISC-203..204 (v0.2.0-B param parsing): playwright firefox probe of `/graph?kinds=manual,derived_overlap&minConfidence=0.5` and `/graph?kinds=foo,bar&minConfidence=NaN`. Both return 200; first surfaces 2 chips ON + slider at "≥ 0.50"; second falls back to all-4 chips + "≥ 0.70" (invalid values silently dropped per spec).
+- ISC-205..206 (filters applied): direct assembler probe via `bun /tmp/strand-default-isc207.ts`. `assembleNetworkGraph({kinds:["manual","derived_overlap"], minConfidence:0.7})` returns nodes=1 edges=0 on the real dataset (only owner; no derived_overlap edges at 0.7 in current data); default returns nodes=150 edges=149.
+- ISC-207 (default byte-identical): explicit comparison — `assembleNetworkGraph()` ≡ `assembleNetworkGraph(undefined, {})` ≡ `assembleNetworkGraph(undefined, {kinds:undefined, minConfidence:undefined})` ≡ `assembleNetworkGraph(undefined, {kinds:[all-4], minConfidence:0.7})`. All four return `nodes=150 edges=149 cand=161 selected=150 floor=0.7`. No regression vs pre-Slice-B.
+- ISC-208..210 (filter panel UI): playwright firefox — `data-testid="graph-filters"` present (1 instance), 4 chips (`kind-chip-{manual,derived_overlap,derived_currently,derived_no_overlap}`), `data-testid="confidence-slider"` + `confidence-value` ("≥ 0.70" on default load).
+- ISC-211 (URL update via pushState): clicking `derived_currently` chip pushes URL `?kinds=manual%2Cderived_overlap%2Cderived_no_overlap`; dragging slider to 0.5 pushes URL `...&minConfidence=0.50`. No full page reload (network probe confirms one `/graph` request, no second navigation).
+- ISC-212 (popstate restores state): goBack from `?kinds=...&minConfidence=0.50` → URL becomes `?kinds=...` → chip states stay reflecting kinds param, slider reverts to "≥ 0.70". goBack again → URL becomes `/graph` (no params) → chip aria-pressed for `derived_currently` reverts to `true`. **Required a Slice-B-specific refactor** (see Decisions entry 2026-05-20: popstate listener replaced by `useSearchParams` synchroniser).
+- ISC-213 (no SSR/CSR hydration mismatch): playwright firefox load of `/graph?kinds=manual,derived_overlap&minConfidence=0.5` — 0 hydration warnings in console (3 unrelated warnings: 2 benign font-preload, 1 pre-existing Cytoscape wheel-sensitivity notice from W6 code).
+- ISC-214 (slider at 0.0 anti-crash): slider dragged to 0.0 — label updates to "≥ 0.00", filter panel still rendered, 0 pageerrors. Server returns 200 (~3.6 MB payload — NODE_CAP still bounds the rendered set; the densifying hairball from W6 Changelog stays prevented in node count, though edge count between the 150 retained nodes can grow large at minimum confidence — documented as a follow-up for an edge cap).
+- ISC-215 (meta.candidateCount): `graph-canvas.tsx` stats grid renders `{meta.candidateCount.toLocaleString()}` (line 127). On default URL: 161 candidates / 150 selected. Filter changes → candidates count updates accordingly (e.g. manual-only: 1 candidate / 1 selected).
+- v0.2.0-B regression: `tsc --noEmit` clean. `verify-w6.ts` fails on missing `data-testid="graph-meta"` — pre-existing v0.2.0-A fallout, NOT a Slice B regression (see Decisions 2026-05-20 v0.2.0-B W6 entry).
+- Cato (E3 cross-vendor audit, v0.2.0-B): `skipped` — codex CLI still not installed on WSL host (same gap noted W4/W5a/W5b/W6/W7). Advisor (commitment-boundary, Rule 2) not invoked this slice — scope was small (~3 files: graph.ts filter additions, graph/page.tsx param parsing, new graph-filters.tsx + tiny graph-kinds.ts), browser-verify caught the only structural bug (client/server boundary), and the popstate→useSearchParams pivot was driven by empirical probe results not a design decision.

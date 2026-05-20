@@ -5,7 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { GraphInspector } from "./graph-inspector";
-import type { AssembledGraph } from "@/lib/queries/graph";
+import { GraphFilters } from "./graph-filters";
+import type { AssembledGraph, GraphEdgeKind } from "@/lib/queries/graph";
 
 const NetworkGraph = dynamic(
   () => import("./network-graph").then((m) => m.NetworkGraph),
@@ -20,7 +21,18 @@ const NetworkGraph = dynamic(
   },
 );
 
-export function GraphCanvas({ nodes, edges, meta }: AssembledGraph) {
+type GraphCanvasProps = AssembledGraph & {
+  initialKinds: GraphEdgeKind[];
+  initialMinConfidence: number;
+};
+
+export function GraphCanvas({
+  nodes,
+  edges,
+  meta,
+  initialKinds,
+  initialMinConfidence,
+}: GraphCanvasProps) {
   // Selection state lives in React; URL is kept in sync via history.pushState
   // so the panel is deep-linkable and the back button steps through
   // selections. Next.js's router.push/router.replace silently drop a
@@ -56,15 +68,26 @@ export function GraphCanvas({ nodes, edges, meta }: AssembledGraph) {
   const onClose = useCallback(() => onSelect(null), [onSelect]);
 
   if (nodes.length === 0) {
+    // Filter panel still mounts so the user can relax aggressive filters
+    // back into a populated graph without leaving the page.
     return (
-      <div className="flex h-full items-center justify-center bg-canvas p-12 text-text-secondary">
-        <div
-          data-testid="graph-empty"
-          className="max-w-md rounded-md border border-border-subtle bg-surface p-6 text-sm"
-        >
-          No nodes meet the confidence floor. Import a LinkedIn export and run
-          the derive job to populate the graph.
+      <div className="grid h-full w-full grid-cols-1 md:grid-cols-[1fr_360px]">
+        <div className="relative h-full min-h-0 bg-canvas">
+          <GraphFilters
+            initialKinds={initialKinds}
+            initialMinConfidence={initialMinConfidence}
+          />
+          <div className="flex h-full items-center justify-center p-12 text-text-secondary">
+            <div
+              data-testid="graph-empty"
+              className="max-w-md rounded-md border border-border-subtle bg-surface p-6 text-sm"
+            >
+              No nodes meet the current filter. Relax the confidence slider or
+              re-enable an edge kind to populate the graph.
+            </div>
+          </div>
         </div>
+        <div className="relative h-full min-h-0 border-l border-border-subtle bg-surface" />
       </div>
     );
   }
@@ -72,6 +95,10 @@ export function GraphCanvas({ nodes, edges, meta }: AssembledGraph) {
   return (
     <div className="grid h-full w-full grid-cols-1 md:grid-cols-[1fr_360px]">
       <div className="relative h-full min-h-0 bg-canvas">
+        <GraphFilters
+          initialKinds={initialKinds}
+          initialMinConfidence={initialMinConfidence}
+        />
         <NetworkGraph
           nodes={nodes}
           edges={edges}

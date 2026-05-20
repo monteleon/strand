@@ -8,6 +8,9 @@
 // toggle can expose them.
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
+import { ALL_GRAPH_KINDS, type GraphEdgeKind } from "./graph-kinds";
+
+export { ALL_GRAPH_KINDS, type GraphEdgeKind };
 
 const HIGH_CONFIDENCE_FLOOR = 0.7;
 // The intentional choice for v1: node-entry threshold and edge-rendering
@@ -28,12 +31,6 @@ export type GraphNode = {
   isOwner: boolean;
   degree: number;
 };
-
-export type GraphEdgeKind =
-  | "manual"
-  | "derived_overlap"
-  | "derived_currently"
-  | "derived_no_overlap";
 
 export type GraphEdge = {
   id: string;
@@ -61,34 +58,104 @@ export type AssembledGraph = {
   meta: GraphMeta;
 };
 
+// v0.2.0-B (Slice B) — interactive /graph filters.
+// User-controlled filters narrow the node + edge set without changing NODE_CAP
+// (the densifying-to-9k-edges hairball from the W6 Changelog stays prevented).
+export type GraphFilters = {
+  kinds?: GraphEdgeKind[];   // default: all four kinds
+  minConfidence?: number;    // default: HIGH_CONFIDENCE_FLOOR (0.7)
+};
+
+// UI kind → DB kind for the `derived_edges.kind` enum.
+const DERIVED_DB_KIND: Record<
+  Exclude<GraphEdgeKind, "manual">,
+  "shared_employer_overlap" | "shared_employer_currently" | "shared_employer_no_overlap"
+> = {
+  derived_overlap: "shared_employer_overlap",
+  derived_currently: "shared_employer_currently",
+  derived_no_overlap: "shared_employer_no_overlap",
+};
+
+function emptyAssembled(minConfidence: number, candidateCount = 0): AssembledGraph {
+  return {
+    nodes: [],
+    edges: [],
+    meta: {
+      nodeCap: NODE_CAP,
+      highConfidenceFloor: minConfidence,
+      edgeFloor: minConfidence,
+      candidateCount,
+      selectedCount: 0,
+      totalEdges: 0,
+    },
+  };
+}
+
 export async function assembleNetworkGraph(
   tenantId: string = LOCAL_TENANT_ID,
+  filters: GraphFilters = {},
 ): Promise<AssembledGraph> {
+  // Resolve filter defaults. Empty `kinds` array is treated as "all selected"
+  // so callers can default-construct GraphFilters without ceremony; the UI
+  // never sends an empty array (ISC-209 forbids deselecting all kinds).
+  const kinds: GraphEdgeKind[] =
+    filters.kinds && filters.kinds.length > 0 ? filters.kinds : ALL_GRAPH_KINDS;
+  const minConfidence = filters.minConfidence ?? HIGH_CONFIDENCE_FLOOR;
+  const includeManual = kinds.includes("manual");
+  const derivedKinds = kinds.filter((k): k is Exclude<GraphEdgeKind, "manual"> => k !== "manual");
+  const derivedDbKinds = derivedKinds.map((k) => DERIVED_DB_KIND[k]);
+
   // Owner row.
   const [tenantRow] = await db.all<{ owner_person_id: string | null }>(sql`
     SELECT owner_person_id FROM tenants WHERE id = ${tenantId} LIMIT 1
   `);
   const ownerId = tenantRow?.owner_person_id ?? null;
 
-  // Candidate people: incident manual OR incident high-conf derived.
-  // We keep their best incident confidence so we can cap below.
+  // Candidate people: incident manual OR incident derived edges that pass the
+  // confidence + kind filters. We keep their best incident confidence so we
+  // can cap below at NODE_CAP. Each leg of the UNION is conditional — if a
+  // filter excludes manual or all derived kinds, that leg is dropped entirely
+  // rather than emitted as a no-op WHERE-clause-against-empty-IN.
+  const candidateLegs: ReturnType<typeof sql>[] = [];
+  if (includeManual) {
+    candidateLegs.push(sql`
+      SELECT me.person_a AS person_id, 1.0 AS confidence
+      FROM manual_edges me WHERE me.tenant_id = ${tenantId}
+    `);
+    candidateLegs.push(sql`
+      SELECT me.person_b AS person_id, 1.0 AS confidence
+      FROM manual_edges me WHERE me.tenant_id = ${tenantId}
+    `);
+  }
+  if (derivedDbKinds.length > 0) {
+    const derivedKindList = sql.join(
+      derivedDbKinds.map((k) => sql`${k}`),
+      sql`, `,
+    );
+    candidateLegs.push(sql`
+      SELECT e.person_a AS person_id, e.confidence FROM derived_edges e
+      WHERE e.tenant_id = ${tenantId}
+        AND e.confidence >= ${minConfidence}
+        AND e.kind IN (${derivedKindList})
+    `);
+    candidateLegs.push(sql`
+      SELECT e.person_b AS person_id, e.confidence FROM derived_edges e
+      WHERE e.tenant_id = ${tenantId}
+        AND e.confidence >= ${minConfidence}
+        AND e.kind IN (${derivedKindList})
+    `);
+  }
+  if (candidateLegs.length === 0) {
+    // No kinds selected at all — return empty rather than synthesise rows.
+    return emptyAssembled(minConfidence);
+  }
   const candidates = await db.all<{
     person_id: string;
     best_confidence: number;
     edge_count: number;
   }>(sql`
     SELECT person_id, MAX(confidence) AS best_confidence, COUNT(*) AS edge_count
-    FROM (
-      SELECT me.person_a AS person_id, 1.0 AS confidence FROM manual_edges me WHERE me.tenant_id = ${tenantId}
-      UNION ALL
-      SELECT me.person_b AS person_id, 1.0 AS confidence FROM manual_edges me WHERE me.tenant_id = ${tenantId}
-      UNION ALL
-      SELECT e.person_a AS person_id, e.confidence FROM derived_edges e
-        WHERE e.tenant_id = ${tenantId} AND e.confidence >= ${HIGH_CONFIDENCE_FLOOR}
-      UNION ALL
-      SELECT e.person_b AS person_id, e.confidence FROM derived_edges e
-        WHERE e.tenant_id = ${tenantId} AND e.confidence >= ${HIGH_CONFIDENCE_FLOOR}
-    )
+    FROM (${sql.join(candidateLegs, sql` UNION ALL `)})
     GROUP BY person_id
     ORDER BY best_confidence DESC, edge_count DESC
   `);
@@ -102,18 +169,7 @@ export async function assembleNetworkGraph(
   }
 
   if (selectedIds.size === 0) {
-    return {
-      nodes: [],
-      edges: [],
-      meta: {
-        nodeCap: NODE_CAP,
-        highConfidenceFloor: HIGH_CONFIDENCE_FLOOR,
-        edgeFloor: EDGE_FLOOR,
-        candidateCount: 0,
-        selectedCount: 0,
-        totalEdges: 0,
-      },
-    };
+    return emptyAssembled(minConfidence, candidates.length);
   }
 
   // Fetch node metadata + each person's "current employer" for cluster colour.
@@ -140,41 +196,47 @@ export async function assembleNetworkGraph(
       AND p.id IN (${sql.join(idsList.map((id) => sql`${id}`), sql`, `)})
   `);
 
-  // Edge fetch (manual + high-conf derived) restricted to selected nodes.
-  const manualEdgesRows = await db
-    .select({
-      personA: schema.manualEdges.personA,
-      personB: schema.manualEdges.personB,
-      note: schema.manualEdges.note,
-    })
-    .from(schema.manualEdges)
-    .where(
-      and(
-        eq(schema.manualEdges.tenantId, tenantId),
-        inArray(schema.manualEdges.personA, idsList),
-        inArray(schema.manualEdges.personB, idsList),
-      ),
-    );
-  // Edge floor (0.5) is lower than node-entry floor (0.7) deliberately:
-  // a person enters the graph only if they have a high-confidence incident
-  // edge, but once they're in, all derived edges ≥ 0.5 BETWEEN retained
-  // nodes are drawn. This adds the same-employer-currently within-cluster
-  // edges that visually anchor company clusters without exploding the node
-  // count to the full network.
-  const derivedEdgesRows = await db.all<{
-    person_a: string;
-    person_b: string;
-    kind: string;
-    confidence: number;
-    company_name: string | null;
-    overlap_months: number | null;
-  }>(sql`
+  // Edge fetch — both manual and derived obey the active filters (kinds +
+  // minConfidence) AND are restricted to the already-selected node set.
+  // When a filter excludes a class entirely, skip the SQL round-trip.
+  const manualEdgesRows = includeManual
+    ? await db
+        .select({
+          personA: schema.manualEdges.personA,
+          personB: schema.manualEdges.personB,
+          note: schema.manualEdges.note,
+        })
+        .from(schema.manualEdges)
+        .where(
+          and(
+            eq(schema.manualEdges.tenantId, tenantId),
+            inArray(schema.manualEdges.personA, idsList),
+            inArray(schema.manualEdges.personB, idsList),
+          ),
+        )
+    : [];
+  // Edge-confidence floor is the user-selected minConfidence (was a fixed
+  // 0.7 pre-Slice-B). NODE_CAP still bounds the rendered set so lowering
+  // the slider to 0.0 does not crash — it just surfaces more low-confidence
+  // edges among the already-capped nodes.
+  const derivedEdgesRows =
+    derivedDbKinds.length === 0
+      ? []
+      : await db.all<{
+          person_a: string;
+          person_b: string;
+          kind: string;
+          confidence: number;
+          company_name: string | null;
+          overlap_months: number | null;
+        }>(sql`
     SELECT person_a, person_b, kind, confidence,
       json_extract(evidence_json, '$.companyName') AS company_name,
       CAST(json_extract(evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months
     FROM derived_edges
     WHERE tenant_id = ${tenantId}
-      AND confidence >= ${EDGE_FLOOR}
+      AND confidence >= ${minConfidence}
+      AND kind IN (${sql.join(derivedDbKinds.map((k) => sql`${k}`), sql`, `)})
       AND person_a IN (${sql.join(idsList.map((id) => sql`${id}`), sql`, `)})
       AND person_b IN (${sql.join(idsList.map((id) => sql`${id}`), sql`, `)})
   `);
@@ -231,8 +293,10 @@ export async function assembleNetworkGraph(
     edges,
     meta: {
       nodeCap: NODE_CAP,
-      highConfidenceFloor: HIGH_CONFIDENCE_FLOOR,
-      edgeFloor: EDGE_FLOOR,
+      // Reflect the active filter so the UI's "confidence floor" stat
+      // matches the slider position rather than the project-default constant.
+      highConfidenceFloor: minConfidence,
+      edgeFloor: minConfidence,
       candidateCount: candidates.length,
       selectedCount: selectedIds.size,
       totalEdges: edges.length,
