@@ -371,6 +371,93 @@ if (postJson?.id) {
   });
 }
 
+// ── ISC-336 (v0.3.3): back-button bookmark coverage ───────────────────
+// Cycle epistemic → warmth → mutuality, then back-button should land on
+// ?sort=warmth with Warmth active. Back again → default URL → Epistemic.
+await page.goto(`${ROOT}/queries/reach/${target.id}`, { waitUntil: "networkidle" });
+await page.click('[data-testid="reach-sort-warmth"]');
+await page.waitForURL(`${ROOT}/queries/reach/${target.id}?sort=warmth`);
+await page.click('[data-testid="reach-sort-mutuality"]');
+await page.waitForURL(`${ROOT}/queries/reach/${target.id}?sort=mutuality`);
+await page.goBack({ waitUntil: "networkidle" });
+const backOneUrl = page.url();
+// Next.js client navigation can lag the DOM update behind the URL change —
+// wait for aria-pressed to settle (up to 3s) before reading.
+await page
+  .waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid="reach-sort-warmth"]')
+        ?.getAttribute("aria-pressed") === "true",
+    { timeout: 3000 },
+  )
+  .catch(() => null);
+const backOneWarmth = await page
+  .locator('[data-testid="reach-sort-warmth"]')
+  .getAttribute("aria-pressed");
+checks.push({
+  name: "ISC-336 back-button from mutuality → ?sort=warmth, Warmth aria-pressed=true",
+  ok: backOneUrl.endsWith("?sort=warmth") && backOneWarmth === "true",
+  detail: `url="${backOneUrl}" wrm=${backOneWarmth}`,
+});
+await page.goBack({ waitUntil: "networkidle" });
+const backTwoUrl = page.url();
+await page
+  .waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid="reach-sort-epistemic"]')
+        ?.getAttribute("aria-pressed") === "true",
+    { timeout: 3000 },
+  )
+  .catch(() => null);
+const backTwoEpi = await page
+  .locator('[data-testid="reach-sort-epistemic"]')
+  .getAttribute("aria-pressed");
+checks.push({
+  name: "ISC-336 back-button from ?sort=warmth → default URL, Epistemic aria-pressed=true",
+  ok: !backTwoUrl.includes("?sort=") && backTwoEpi === "true",
+  detail: `url="${backTwoUrl}" epi=${backTwoEpi}`,
+});
+
+// ── ISC-337 (v0.3.3): default-elision asymmetry — explicit ?sort=epistemic param renders correctly
+await page.goto(`${ROOT}/queries/reach/${target.id}?sort=epistemic`, { waitUntil: "networkidle" });
+const epiExplicitPressed = await page
+  .locator('[data-testid="reach-sort-epistemic"]')
+  .getAttribute("aria-pressed");
+checks.push({
+  name: "ISC-337 explicit ?sort=epistemic URL → Epistemic active (parser is forgiving on redundant param)",
+  ok: epiExplicitPressed === "true",
+  detail: `epi=${epiExplicitPressed}`,
+});
+
+// ── ISC-338 (v0.3.3): bookmark round-trip with ?sort=epistemic URL ────
+const bookmarkEpiBody = JSON.stringify({
+  name: `verify-v033-epi-${Date.now()}`,
+  url: `/queries/reach/${target.id}?sort=epistemic`,
+});
+const postEpiResp = await fetch(`${ROOT}/api/bookmarks`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: bookmarkEpiBody,
+});
+const postEpiJson = postEpiResp.ok ? await postEpiResp.json() : null;
+checks.push({
+  name: "ISC-338 POST /api/bookmarks with ?sort=epistemic URL → 201",
+  ok: postEpiResp.status === 201 && !!postEpiJson?.id,
+  detail: `status=${postEpiResp.status} id=${postEpiJson?.id ?? "—"}`,
+});
+if (postEpiJson?.id) {
+  const delEpiResp = await fetch(`${ROOT}/api/bookmarks/${postEpiJson.id}`, {
+    method: "DELETE",
+  });
+  checks.push({
+    name: "ISC-338 DELETE /api/bookmarks/[id] (?sort=epistemic bookmark) → 204",
+    ok: delEpiResp.status === 204,
+    detail: `status=${delEpiResp.status}`,
+  });
+}
+
 // ── zero pageerror + zero non-localhost ──────────────────────────────
 checks.push({
   name: "ISC-294 zero pageerror across all visited routes",

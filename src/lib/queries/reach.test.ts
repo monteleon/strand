@@ -292,6 +292,58 @@ async function pickAllZeroWarmthTarget(): Promise<string | null> {
   return rows[0]?.target_id ?? null;
 }
 
+describe("v0.3.3: fixture-skip meta-assertions (Advisor v0.3.2 conjecture #5)", () => {
+  test("ISC-334: pickTargetWithReachCandidates() returns NON-NULL on current dataset — otherwise every adversarial test silently skips", async () => {
+    const targetId = await pickTargetWithReachCandidates();
+    expect(targetId).not.toBeNull();
+    expect(typeof targetId).toBe("string");
+  });
+
+  test("ISC-335: divergent-rankings adversarial path is actually exercised (top-1 differs between epistemic and warmth on at least one target in top-20 by reach count) — NOT silently skipped", async () => {
+    // Mirror the divergent-rankings test's sweep, but assert at least one
+    // target qualifies. If the dataset has no divergent target, the meta-
+    // assertion fails loudly here rather than letting the adversarial test
+    // pass via the silent "no candidates qualified" branch.
+    const rows = await db.all<{ target_id: string }>(sql`
+      WITH owner AS (SELECT owner_person_id AS id FROM tenants WHERE id = 'local')
+      SELECT t.target_id
+      FROM (
+        SELECT
+          CASE WHEN e.person_a = c.to_person_id THEN e.person_b ELSE e.person_a END AS intermediary_id,
+          CASE WHEN e.person_a = c.to_person_id THEN e.person_a ELSE e.person_b END AS target_id
+        FROM derived_edges e
+        JOIN connections c
+          ON c.tenant_id = e.tenant_id
+         AND c.from_person_id = (SELECT id FROM owner)
+         AND (c.to_person_id = e.person_a OR c.to_person_id = e.person_b)
+        WHERE e.tenant_id = 'local'
+      ) t
+      WHERE t.intermediary_id != t.target_id
+        AND t.target_id != (SELECT id FROM owner)
+      GROUP BY t.target_id
+      HAVING COUNT(*) >= 5
+      ORDER BY COUNT(*) DESC
+      LIMIT 20
+    `);
+    let divergentFound = false;
+    for (const r of rows) {
+      const epi = await findReachToPerson(r.target_id, "local", "epistemic");
+      const wrm = await findReachToPerson(r.target_id, "local", "warmth");
+      if (!epi || epi.status.kind !== "reach") continue;
+      if (!wrm || wrm.status.kind !== "reach") continue;
+      const epiTop = epi.status.candidates[0]?.intermediaryId;
+      const wrmTop = wrm.status.candidates[0]?.intermediaryId;
+      if (epiTop && wrmTop && epiTop !== wrmTop) {
+        divergentFound = true;
+        break;
+      }
+    }
+    // Loud assertion: if no divergent target qualified, the divergent
+    // adversarial test in the v0.3.2 suite is silently skipping every run.
+    expect(divergentFound).toBe(true);
+  });
+});
+
 describe("v0.3.2: adversarial reach fixtures", () => {
   test("ISC-303: all-zero-warmth target — toggle still renders; sort=epistemic and sort=warmth produce IDENTICAL orderings (no message tiebreak signal)", async () => {
     const targetId = await pickAllZeroWarmthTarget();
