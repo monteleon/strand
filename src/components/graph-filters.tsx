@@ -6,11 +6,19 @@ import {
   ALL_GRAPH_KINDS,
   type GraphEdgeKind,
 } from "@/lib/queries/graph-kinds";
+import { CompanyPicker } from "@/components/company-picker";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
 const SLIDER_STEP = 0.05;
 const DEFAULT_MIN_DEGREE = 1;
 const MAX_MIN_DEGREE = 20;
+// v0.4.0 (ISC-379, ISC-381): cap dropdown snap points + default.
+// Default kept at 150 to preserve byte-identical regression for the no-
+// param URL. MAX_NODE_CAP (500) bounds the upper end.
+const DEFAULT_CAP = 150;
+const CAP_OPTIONS = [50, 100, 150, 250, 500] as const;
+type GraphScope = "current" | "ever";
+const DEFAULT_SCOPE: GraphScope = "current";
 
 const KIND_LABEL: Record<GraphEdgeKind, string> = {
   manual: "Manual",
@@ -30,6 +38,9 @@ function urlFor(
   kinds: GraphEdgeKind[],
   minConfidence: number,
   minDegree: number,
+  cap: number,
+  companyId: string | null,
+  scope: GraphScope,
   search: string,
 ): string {
   const params = new URLSearchParams(search);
@@ -45,6 +56,20 @@ function urlFor(
 
   if (minDegree <= DEFAULT_MIN_DEGREE) params.delete("minDegree");
   else params.set("minDegree", String(minDegree));
+
+  // v0.4.0: cap / company / scope params. Default values are elided so the
+  // default URL stays byte-identical to pre-v0.4.0 (ISC-398).
+  if (cap === DEFAULT_CAP) params.delete("cap");
+  else params.set("cap", String(cap));
+
+  if (!companyId) {
+    params.delete("company");
+    params.delete("scope"); // scope is meaningless without a company
+  } else {
+    params.set("company", companyId);
+    if (scope === DEFAULT_SCOPE) params.delete("scope");
+    else params.set("scope", scope);
+  }
 
   const qs = params.toString();
   return qs ? `/graph?${qs}` : "/graph";
@@ -73,14 +98,40 @@ function parseMinDegreeParam(raw: string | null): number | null {
   return Math.max(1, Math.min(MAX_MIN_DEGREE, n));
 }
 
+// v0.4.0 (Advisor patch): cap is a DISCRETE control — only the dropdown's
+// snap values are accepted. Anything else (out-of-range, non-snap ints like
+// 37, garbage strings) falls back to null which lets the caller use the
+// component's default. URL ⇔ dropdown is an exact round-trip; no silent
+// snap-on-render. Stance (1) from the Advisor commitment-boundary review.
+function parseCapParam(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return null;
+  return (CAP_OPTIONS as readonly number[]).includes(n) ? n : null;
+}
+
+function parseScopeParam(raw: string | null): GraphScope | null {
+  if (raw === "ever") return "ever";
+  if (raw === "current") return "current";
+  return null;
+}
+
 export function GraphFilters({
   initialKinds,
   initialMinConfidence,
   initialMinDegree,
+  initialCap = DEFAULT_CAP,
+  initialCompanyId = null,
+  initialCompanyName = null,
+  initialScope = DEFAULT_SCOPE,
 }: {
   initialKinds: GraphEdgeKind[];
   initialMinConfidence: number;
   initialMinDegree: number;
+  initialCap?: number;
+  initialCompanyId?: string | null;
+  initialCompanyName?: string | null;
+  initialScope?: GraphScope;
 }) {
   const router = useRouter();
   // useSearchParams is the App Router's reactive URL hook. It re-fires on
@@ -90,9 +141,16 @@ export function GraphFilters({
   const urlKinds = parseKindsParam(searchParams.get("kinds")) ?? initialKinds;
   const urlMinConf = parseMinConfParam(searchParams.get("minConfidence")) ?? initialMinConfidence;
   const urlMinDeg = parseMinDegreeParam(searchParams.get("minDegree")) ?? initialMinDegree;
+  const urlCap = parseCapParam(searchParams.get("cap")) ?? initialCap;
+  const urlCompanyId = (searchParams.get("company")?.trim() || null) ?? initialCompanyId;
+  const urlScope = parseScopeParam(searchParams.get("scope")) ?? initialScope;
   const [kinds, setKinds] = useState<GraphEdgeKind[]>(urlKinds);
   const [minConfidence, setMinConfidence] = useState<number>(urlMinConf);
   const [minDegree, setMinDegree] = useState<number>(urlMinDeg);
+  const [cap, setCap] = useState<number>(urlCap);
+  const [companyId, setCompanyId] = useState<string | null>(urlCompanyId);
+  const [companyName, setCompanyName] = useState<string | null>(initialCompanyName);
+  const [scope, setScope] = useState<GraphScope>(urlScope);
 
   // Keep local state in sync with URL — fires on Back/Forward navigation
   // (App Router updates searchParams on popstate) and on any router.refresh.
@@ -100,13 +158,25 @@ export function GraphFilters({
     setKinds(urlKinds);
     setMinConfidence(urlMinConf);
     setMinDegree(urlMinDeg);
-    // urlKinds / urlMinConf / urlMinDeg are derived; tracking the underlying
-    // string keys is what matters — they only change when the URL changes.
+    setCap(urlCap);
+    setCompanyId(urlCompanyId);
+    setScope(urlScope);
+    // When companyId is cleared (or changed to a value the parent didn't
+    // resolve), drop the displayed name so it doesn't lie. The page-level
+    // server resolution re-populates initialCompanyName on the next render.
+    if (urlCompanyId !== companyId) setCompanyName(initialCompanyName);
+    // urlKinds / urlMinConf / urlMinDeg / urlCap / urlCompanyId / urlScope
+    // are derived; tracking the underlying string keys is what matters —
+    // they only change when the URL changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     searchParams.get("kinds"),
     searchParams.get("minConfidence"),
     searchParams.get("minDegree"),
+    searchParams.get("cap"),
+    searchParams.get("company"),
+    searchParams.get("scope"),
+    initialCompanyName,
   ]);
 
   // Single canonical URL writer. Same pattern as `?selected=` in
@@ -115,8 +185,23 @@ export function GraphFilters({
   // on the same pathname in this app. Documented in ISA Decisions
   // (2026-05-19 v0.2.0 graph URL pattern).
   const apply = useCallback(
-    (nextKinds: GraphEdgeKind[], nextMinConf: number, nextMinDeg: number) => {
-      const url = urlFor(nextKinds, nextMinConf, nextMinDeg, window.location.search);
+    (
+      nextKinds: GraphEdgeKind[],
+      nextMinConf: number,
+      nextMinDeg: number,
+      nextCap: number,
+      nextCompanyId: string | null,
+      nextScope: GraphScope,
+    ) => {
+      const url = urlFor(
+        nextKinds,
+        nextMinConf,
+        nextMinDeg,
+        nextCap,
+        nextCompanyId,
+        nextScope,
+        window.location.search,
+      );
       const current = window.location.pathname + window.location.search;
       if (url !== current) {
         window.history.pushState(null, "", url);
@@ -134,9 +219,9 @@ export function GraphFilters({
       // when this is the only selection are no-ops.
       if (next.length === 0) return;
       setKinds(next);
-      apply(next, minConfidence, minDegree);
+      apply(next, minConfidence, minDegree, cap, companyId, scope);
     },
-    [kinds, minConfidence, minDegree, apply],
+    [kinds, minConfidence, minDegree, cap, companyId, scope, apply],
   );
 
   const onSliderChange = useCallback(
@@ -144,9 +229,9 @@ export function GraphFilters({
       const next = parseFloat(e.target.value);
       if (!Number.isFinite(next)) return;
       setMinConfidence(next);
-      apply(kinds, next, minDegree);
+      apply(kinds, next, minDegree, cap, companyId, scope);
     },
-    [kinds, minDegree, apply],
+    [kinds, minDegree, cap, companyId, scope, apply],
   );
 
   const onMinDegreeChange = useCallback(
@@ -155,9 +240,46 @@ export function GraphFilters({
       if (!Number.isFinite(next)) return;
       const clamped = Math.max(1, Math.min(MAX_MIN_DEGREE, next));
       setMinDegree(clamped);
-      apply(kinds, minConfidence, clamped);
+      apply(kinds, minConfidence, clamped, cap, companyId, scope);
     },
-    [kinds, minConfidence, apply],
+    [kinds, minConfidence, cap, companyId, scope, apply],
+  );
+
+  const onCapChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const next = parseInt(e.target.value, 10);
+      if (!Number.isFinite(next)) return;
+      setCap(next);
+      apply(kinds, minConfidence, minDegree, next, companyId, scope);
+    },
+    [kinds, minConfidence, minDegree, companyId, scope, apply],
+  );
+
+  const onCompanySelect = useCallback(
+    (id: string, name: string) => {
+      setCompanyId(id);
+      setCompanyName(name);
+      // New company picked → reset scope to default. The toggle then
+      // becomes visible.
+      setScope(DEFAULT_SCOPE);
+      apply(kinds, minConfidence, minDegree, cap, id, DEFAULT_SCOPE);
+    },
+    [kinds, minConfidence, minDegree, cap, apply],
+  );
+
+  const onCompanyClear = useCallback(() => {
+    setCompanyId(null);
+    setCompanyName(null);
+    setScope(DEFAULT_SCOPE);
+    apply(kinds, minConfidence, minDegree, cap, null, DEFAULT_SCOPE);
+  }, [kinds, minConfidence, minDegree, cap, apply]);
+
+  const onScopeChange = useCallback(
+    (next: GraphScope) => {
+      setScope(next);
+      apply(kinds, minConfidence, minDegree, cap, companyId, next);
+    },
+    [kinds, minConfidence, minDegree, cap, companyId, apply],
   );
 
   return (
@@ -261,6 +383,107 @@ export function GraphFilters({
         </div>
         <p className="mt-1 text-[11px] leading-snug text-text-tertiary">
           Hide leaf nodes — show only people connected to ≥ N others.
+        </p>
+      </div>
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-text-secondary">Max people</span>
+          <span
+            className="font-mono text-text-primary"
+            data-testid="cap-value"
+          >
+            {cap}
+          </span>
+        </div>
+        <select
+          value={cap}
+          onChange={onCapChange}
+          aria-label="Maximum number of people"
+          data-testid="cap-select"
+          className="mt-2 w-full rounded-sm border border-border-subtle bg-surface px-2 py-1 text-xs text-text-primary"
+        >
+          {CAP_OPTIONS.map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}{opt === DEFAULT_CAP ? " (default)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-text-secondary">At company</span>
+          {companyId && (
+            <button
+              type="button"
+              data-testid="company-clear"
+              onClick={onCompanyClear}
+              className="font-mono text-[10px] text-text-tertiary transition-colors duration-fast ease-cubic-out hover:text-text-primary"
+              aria-label="Clear company filter"
+            >
+              × clear
+            </button>
+          )}
+        </div>
+        {companyId && companyName ? (
+          <p
+            data-testid="company-active"
+            data-company-id={companyId}
+            className="mt-2 truncate rounded-sm border border-accent-signal/30 bg-accent-signal/10 px-2 py-1 text-xs text-accent-signal"
+            title={companyName}
+          >
+            {companyName}
+          </p>
+        ) : (
+          <div className="mt-2">
+            <CompanyPicker
+              placeholder="Type ≥2 chars…"
+              onSelect={onCompanySelect}
+            />
+          </div>
+        )}
+        {companyId && (
+          <div
+            data-testid="scope-toggle"
+            className="mt-2 flex items-center gap-1 rounded-sm border border-border-subtle bg-surface p-0.5 font-mono text-[10px] uppercase tracking-wide"
+          >
+            <button
+              type="button"
+              data-testid="scope-current"
+              aria-pressed={scope === "current"}
+              onClick={() => onScopeChange("current")}
+              className={
+                "flex-1 rounded-sm px-2 py-0.5 transition-colors " +
+                (scope === "current"
+                  ? "bg-accent-signal/15 text-accent-signal"
+                  : "text-text-tertiary hover:text-text-secondary")
+              }
+            >
+              Current
+            </button>
+            <button
+              type="button"
+              data-testid="scope-ever"
+              aria-pressed={scope === "ever"}
+              onClick={() => onScopeChange("ever")}
+              className={
+                "flex-1 rounded-sm px-2 py-0.5 transition-colors " +
+                (scope === "ever"
+                  ? "bg-accent-warmth/15 text-accent-warmth"
+                  : "text-text-tertiary hover:text-text-secondary")
+              }
+            >
+              Ever
+            </button>
+          </div>
+        )}
+        <p className="mt-1 text-[11px] leading-snug text-text-tertiary">
+          {companyId
+            ? scope === "current"
+              ? "People currently at this company."
+              : "People who ever worked at this company."
+            : "Restrict the graph to one company."}
         </p>
       </div>
     </div>

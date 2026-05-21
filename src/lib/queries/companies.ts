@@ -16,6 +16,50 @@ function baseWhere(tenantId: string, q: string) {
   return and(tenant, search);
 }
 
+// v0.4.0 (ISC-376): typeahead search for the CompanyPicker in the /graph
+// filter panel. Mirrors searchPeople's shape — substring on normalised name,
+// case-insensitive, capped result count. Ordered by people-count DESC so the
+// top of the suggestion list is "the companies most likely to be meaningful
+// in your network".
+export async function searchCompanies(
+  q: string,
+  limit: number = 8,
+  tenantId: string = LOCAL_TENANT_ID,
+): Promise<{ id: string; name: string; peopleCount: number }[]> {
+  const trimmed = q.trim();
+  if (!trimmed) return [];
+  // v0.4.0 (Advisor patch): escape LIKE wildcards (% and _) in user input.
+  // Without this, a typeahead query containing `%` or `_` would behave as
+  // a wildcard and silently return unintended matches. Drizzle parameter-
+  // binds the value, but the wildcard interpretation happens INSIDE the
+  // LIKE — escaping in the value is the right layer. `ESCAPE '\'` clause
+  // tells SQLite to treat backslash as the literal-escape character.
+  const escaped = trimmed
+    .toLowerCase()
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_");
+  const rows = await db.all<{
+    id: string;
+    name: string;
+    people_count: number;
+  }>(sql`
+    SELECT c.id, c.name, COUNT(DISTINCT p.person_id) AS people_count
+    FROM companies c
+    LEFT JOIN positions p ON p.company_id = c.id AND p.tenant_id = c.tenant_id
+    WHERE c.tenant_id = ${tenantId}
+      AND lower(c.normalized_name) LIKE ${"%" + escaped + "%"} ESCAPE '\\'
+    GROUP BY c.id
+    ORDER BY people_count DESC, c.name ASC
+    LIMIT ${limit}
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    peopleCount: Number(r.people_count),
+  }));
+}
+
 export async function listCompanies(
   params: PageParams,
   tenantId: string = LOCAL_TENANT_ID,

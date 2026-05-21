@@ -25,6 +25,12 @@ type GraphCanvasProps = AssembledGraph & {
   initialKinds: GraphEdgeKind[];
   initialMinConfidence: number;
   initialMinDegree: number;
+  // v0.4.0 (ISC-382, ISC-383): cap / company / scope forwarded to the
+  // filter panel so the controls reflect the URL state on cold load.
+  initialCap?: number;
+  initialCompanyId?: string | null;
+  initialCompanyName?: string | null;
+  initialScope?: "current" | "ever";
 };
 
 export function GraphCanvas({
@@ -34,6 +40,10 @@ export function GraphCanvas({
   initialKinds,
   initialMinConfidence,
   initialMinDegree,
+  initialCap,
+  initialCompanyId = null,
+  initialCompanyName = null,
+  initialScope = "current",
 }: GraphCanvasProps) {
   // Selection state lives in React; URL is kept in sync via history.pushState
   // so the panel is deep-linkable and the back button steps through
@@ -79,6 +89,10 @@ export function GraphCanvas({
             initialKinds={initialKinds}
             initialMinConfidence={initialMinConfidence}
             initialMinDegree={initialMinDegree}
+            initialCap={initialCap}
+            initialCompanyId={initialCompanyId}
+            initialCompanyName={initialCompanyName}
+            initialScope={initialScope}
           />
           <div className="flex h-full items-center justify-center p-12 text-text-secondary">
             <div
@@ -102,6 +116,10 @@ export function GraphCanvas({
           initialKinds={initialKinds}
           initialMinConfidence={initialMinConfidence}
           initialMinDegree={initialMinDegree}
+          initialCap={initialCap}
+          initialCompanyId={initialCompanyId}
+          initialCompanyName={initialCompanyName}
+          initialScope={initialScope}
         />
         <NetworkGraph
           nodes={nodes}

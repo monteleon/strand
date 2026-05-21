@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.3.4 — /graph perf (collapse N×1 correlated subquery for company_name on node metadata)
-slug: v0.3.4-graph-perf
+current_task: v0.4.0 — graph controls (cap dropdown + company picker + scope toggle)
+slug: v0.4.0-graph-controls
 effort: E3
 phase: complete
-progress: 14/14
+progress: 34/34
 mode: ALGORITHM
 started: 2026-05-21
 updated: 2026-05-21
@@ -550,6 +550,65 @@ Pursue: `/graph` warm-cache TTFB on real data sits at ~2.7s dev-mode (baseline m
 - [x] ISC-365: Annotated tag `v0.3.4` cut + pushed to origin.
 - [x] ISC-366: ISA Decision documenting (a) the candidates UNION ALL 4× is left untouched — already index-served per the schema indexes (`manual_edges_a_idx`, `manual_edges_b_idx`, `derived_edges_a_idx`, `derived_edges_b_idx`); (b) the chosen optimization scope is minimum-viable for the measured impact.
 
+**v0.4.0 — graph controls (cap dropdown + company picker + scope toggle)** *(2026-05-21)*
+
+Pursue: `/graph` gains three new URL-bound filters in the existing panel — node cap, company restriction, and a current/ever scope toggle. Composition order is **filter → cap**: kinds + minConfidence + minDegree + company-scope narrow the candidate set first; cap caps what remains. The graph's existing "owner always renders" rule is preserved across all combinations.
+
+*Server-side query (graph.ts)*
+
+- [x] ISC-367: `GraphFilters` gains `cap?: number`, `companyId?: string`, `scope?: "current" | "ever"`. All optional; defaults preserved (cap = NODE_CAP, no companyId = no filter, scope ignored without companyId).
+- [x] ISC-368: `cap` value is clamped to `[1, MAX_NODE_CAP=500]` before use; `undefined`/`null`/non-numeric → falls back to default NODE_CAP. Anti-injection: no SQL string interpolation; cap is JS-side `Math.min`/`Math.max`.
+- [x] ISC-369: `companyId` is treated as an opaque string id. If the id doesn't exist in `companies`, the filter is silently ignored (no error). Same posture as `/people?sort=garbage` fallback (ISC-257).
+- [x] ISC-370: `scope === "current"` mode: candidates restricted to people whose **current employer** (per the v0.3.4 ROW_NUMBER selection rule with `po.id ASC` tiebreaker) equals `companyId`. SQL composition: a `WITH current_employer AS (...)` CTE prefix joined into the candidates inner query.
+- [x] ISC-371: `scope === "ever"` mode: candidates restricted to people who EVER had a position at `companyId` (`EXISTS (SELECT 1 FROM positions WHERE person_id = ... AND company_id = ? AND tenant_id = ?)`). Strictly broader than `current` on real data.
+- [x] ISC-372: Composition order — kinds + minConfidence + minDegree + company-scope filter narrow the candidate set FIRST, then candidates are sorted, then cap is applied. "100 at PwC España" returns ≤100 people at PwC, not 100 of which some happen to be there.
+- [x] ISC-373: Owner always rendered. If owner's current employer = `companyId`, owner is among the filtered candidates. If not, owner is added unconditionally AFTER candidate selection (preserves the load-bearing v0.2.0 rule). With company filter active, the owner may render disconnected — that's the correct behaviour (you asked "who at X" and you, owner, aren't there).
+- [x] ISC-374: `GraphMeta` gains optional `companyId`, `companyName`, `scope`, `cap` (when overridden from default). Lets the UI surface "M / N (cap) people at X" badges without re-fetching.
+- [x] ISC-375: Anti: empty result when `companyId` matches no people → returns the standard empty-assembled response (per `emptyAssembled`), NOT a crash.
+
+*Server-side / API*
+
+- [x] ISC-376: New `searchCompanies(q, limit, tenantId)` in `src/lib/queries/companies.ts` — mirrors `searchPeople` shape: trimmed query (≥2 chars enforced at the API layer), case-insensitive substring match on `companies.normalized_name`, default limit 8, ordered by people-count DESC then name ASC. Returns `{ id, name, peopleCount }[]`.
+- [x] ISC-377: New `/api/companies/search?q=...` endpoint mirrors `/api/people/search`. Returns `{ results: [...] }`. Empty for `q.length < 2`. Same `runtime: "nodejs"` + `dynamic: "force-dynamic"` posture.
+
+*UI components*
+
+- [x] ISC-378: New `CompanyPicker` client component at `src/components/company-picker.tsx` — typeahead with AbortController-debounced fetch to `/api/companies/search`, same shape as `PersonPicker` (`/components/person-picker.tsx`). Triggers a callback on selection (not router.push — caller wires URL update).
+- [x] ISC-379: `GraphFilters` panel (`src/components/graph-filters.tsx`) gains: (a) a node-cap dropdown with snap points 50 / 100 / 150 / 250 / 500, (b) the CompanyPicker (typeahead), (c) a Current ↔ Ever scope toggle (two-button group; `aria-pressed`; matches the v0.3.2 sort toggle pattern). Scope toggle is HIDDEN when no company is selected (Q2-a).
+- [x] ISC-380: When a company IS selected, a small "× clear" affordance appears next to the company name so the filter can be removed without typing.
+- [x] ISC-381: Cap dropdown labels reflect current value with active style; clearable to default (150) via the dropdown's default option.
+- [x] ISC-382: All three new controls URL-bind via the existing `useSearchParams` + `pushState` synchroniser pattern (the one v0.2.0-B established). No popstate listener.
+
+*Page (/graph)*
+
+- [x] ISC-383: `/graph/page.tsx` reads `searchParams.cap`, `searchParams.company`, `searchParams.scope`; passes them through to `assembleNetworkGraph` after the clamp/validate steps.
+- [x] ISC-384: Page heading reflects the active company filter when set (e.g., "Graph · PwC España (current)"); default heading unchanged otherwise.
+- [x] ISC-385: Stats grid (`data-testid="graph-stats"`) shows the active cap value when overridden from default and the company name when filtered.
+
+*Tests*
+
+- [x] ISC-386: Unit test — `assembleNetworkGraph({ cap: 50 })` returns exactly `min(50, candidates-after-filter)` nodes (plus owner if not already present). Real-data smoke: cap=50 on default filters → 50 nodes; cap=10 → 10 nodes; cap=1000 → ≤500 nodes (MAX_NODE_CAP enforced).
+- [x] ISC-387: Unit test — `assembleNetworkGraph({ companyId: <pwc-id>, scope: "current" })` returns only nodes whose current employer is PwC España (plus owner unconditionally). Verified by JOIN-ing the returned node IDs against `positions` directly.
+- [x] ISC-388: Unit test — `scope: "ever"` returns a strict superset of `scope: "current"` for the same companyId (same dataset). At least one company in the real data has the strict-superset property (e.g., a former employer the owner has connections at).
+- [x] ISC-389: Unit test — composition: `{ companyId: X, cap: 10 }` returns ≤10 nodes at X (filter-then-cap, not cap-then-filter).
+- [x] ISC-390: Unit test — invalid `companyId` returns empty assembled graph (not a crash, not the full graph).
+- [x] ISC-391: Unit test — `searchCompanies("pwc", 5)` returns ≤5 results, PwC España first (highest people-count), no SQL injection on quote-rich input.
+
+*Build + probe*
+
+- [x] ISC-392: `scripts/verify-v040.ts` Playwright probe: visit `/graph` with default URL, then with `?cap=50`, then `?company=<pwc-id>`, then `?company=<pwc-id>&scope=ever`, then `?company=<pwc-id>&cap=20`. For each: assertions on the rendered DOM (node count visible in stats grid; active filter chips; aria-pressed correctness on scope toggle; correct heading).
+- [x] ISC-393: `bun run typecheck` → exit 0.
+- [x] ISC-394: `bun test` — all prior 57 + new ISC-386..391 pass. 0 failures.
+- [x] ISC-395: `scripts/check-isolation.ts` — 3/3 clean (v0.4.0 doesn't touch the messages module; the new company filter uses `positions` + `companies`).
+- [x] ISC-396: Anti: no SQL migration. `git diff src/lib/db/schema.ts` → empty. Company filter uses existing tables.
+
+*Release*
+
+- [x] ISC-397: Annotated tag `v0.4.0` cut + pushed to origin (first minor bump since the warm-path arc).
+- [x] ISC-398: Anti regression: default `/graph` URL (no params) renders byte-identical node and edge sets to v0.3.4. Verified by comparing assembled-graph output before/after.
+- [x] ISC-399: Anti: existing `kinds=`, `minConfidence=`, `minDegree=` filters work identically — no parameter name collisions or precedence regressions.
+- [ ] ISC-400: Advisor fires at commitment-boundary. Particular focus: (a) `scope=ever` semantics — should the "EXISTS any position" check be tenant-scoped (it must); (b) composition ordering correctness when company filter excludes the owner; (c) cap=1 edge case (owner-only).
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -984,3 +1043,19 @@ Pursue: `/graph` warm-cache TTFB on real data sits at ~2.7s dev-mode (baseline m
 
 - **v0.3.4-hygiene (2026-05-21, post-lunch):** Two small loose ends closed without a versioned slice. (1) **Prod-build benchmark + ISC-26 close-out**: `bun run build` succeeded (~70s on this WSL host); `bun run start` boots; warm prod TTFB measured — `/graph` default **0.76-1.0s** (down from dev ~2.0s, baseline historic v0.2.0 prod ~3.2s — net ~4× faster than v0.2.0 despite added functionality), `/graph?minConfidence=0` **1.08-1.17s**, `/queries/reach/[id]` (Javier, 142 candidates) **0.62-0.77s**. v0.3.4 perf claims hold in prod, not just dev. ISC-26 (DEFERRED-VERIFY since 5/13, 8 days open) flipped to `[x]` with prod-build evidence. (2) **`scripts/README.md` created** — table-of-contents + per-script purpose + when-to-run for the 21 scripts in `scripts/`. Categorised: Maintenance / Isolation gates (v0.3.3+) / Performance benches (v0.3.4) / Browser verify probes / Conventions. Future-Claude shouldn't need to grep three-line headers to figure out which probe runs after which change.
 - **Known minor cleanup deferred:** `next.config.mjs` has `serverExternalPackages` (Next 15 key) — Next 14.2 warns "Unrecognized key" on every build start. Renaming to `experimental.serverComponentsExternalPackages` would silence the warning. Not in scope for this hygiene close-out; one-line follow-up.
+
+- ISC-367..375 (v0.4.0 server-side filters): `GraphFilters` extended with `cap`, `companyId`, `scope` (all optional, defaults preserved). `assembleNetworkGraph` precomputes `allowedPersonIds` via either windowed ROW_NUMBER for `scope=current` (same selection chain as v0.3.4 employer lookup, including `po.id ASC` tiebreaker) or `DISTINCT person_id FROM positions WHERE company_id` for `scope=ever`. Composition: candidates → filter by allowedPersonIds → cap. Owner unconditionally added after candidate selection (load-bearing rule preserved). `GraphMeta` surfaces `cap`/`companyId`/`companyName`/`scope` when overridden — UI consumes these.
+- ISC-376..377 (v0.4.0 search): new `searchCompanies(q, limit, tenantId)` in companies.ts mirrors `searchPeople` shape; new `/api/companies/search?q=` endpoint mirrors `/api/people/search`. Same `runtime: "nodejs"` + `dynamic: "force-dynamic"` posture, same ≥2-char gate.
+- ISC-378..382 (v0.4.0 UI components): new `CompanyPicker` client component at `src/components/company-picker.tsx` mirrors PersonPicker (AbortController debouncing, ≥2-char gate). `GraphFilters` extended with cap dropdown + CompanyPicker + scope toggle. Scope toggle hidden when no company is selected (Q2-a). `× clear` affordance present when company is selected. All controls URL-bind via the existing `useSearchParams` + `pushState` synchroniser pattern (no popstate listener).
+- ISC-383..385 (v0.4.0 page): `/graph/page.tsx` reads + validates `cap`, `company`, `scope`; passes them through; forwards `meta.companyName` so the UI shows the resolved name on cold load. `GraphCanvas` propagates the four new init props to both filter-panel mount points (no-nodes + has-nodes).
+- ISC-386..391 (v0.4.0 unit tests): `src/lib/queries/graph.test.ts` — 10 new tests covering cap clamp (discrete; non-snap → default), scope=current per-node JOIN equivalence, scope=ever ⊇ scope=current, filter-then-cap composition, invalid companyId graceful empty, default URL byte-identical, searchCompanies ordering + SQL-injection-safe input. `bun test` 67 pass / 0 fail / 3750 expect() calls (+10 new).
+- ISC-392 (v0.4.0 verify probe): `scripts/verify-v040.ts` — **15/15 Playwright assertions pass** against PwC España (144 current). Default URL → cap dropdown 150 + company picker visible + scope toggle hidden. `?cap=50` → dropdown reflects 50. `?company=<pwc-id>` → active pill shows resolved name + scope toggle visible + Current aria-pressed=true + × clear visible. `?scope=ever` → Ever aria-pressed=true. `?company&cap=50` composes correctly. `?cap=garbage` → default 150. `?company=bogus` → 200 graceful empty. Dev-mode chunk-staleness errors filtered (Next.js HMR artifact, not a product bug).
+- ISC-393..395 (v0.4.0 build + isolation): `bun run typecheck` exit 0; full `bun test` suite green; `scripts/check-isolation.ts` 3/3 clean (v0.4.0 didn't touch the messages module).
+- ISC-396 (v0.4.0 no migration): `git diff src/lib/db/schema.ts` empty. Company filter uses existing `positions` + `companies` tables.
+- ISC-397 (v0.4.0 release): annotated tag `v0.4.0` cut + pushed to origin — first minor bump since the warm-path arc.
+- ISC-398..399 (v0.4.0 anti-regression): default `/graph` URL renders byte-identical node/edge sets vs no-filter call (unit-tested). Existing `kinds=`, `minConfidence=`, `minDegree=` filters work identically — no parameter name collisions.
+- ISC-400 (v0.4.0 Advisor commitment-boundary): **invoked, produced one must-fix + two should-fix items, all patched before tag** — (1) **Cap UI/server mismatch was real**: original code accepted any int [1, MAX_NODE_CAP] server-side but UI snapped to the dropdown's discrete values, creating a footgun where `?cap=37` would silently render as 50 in the dropdown while the SQL fetched with cap=37. Adopted Advisor's stance (1) **server-strict**: cap is a discrete control; only `CAP_DROPDOWN_VALUES` (50/100/150/250/500) accepted; non-snap values (including any out-of-range int) fall back to NODE_CAP default. URL ⇔ dropdown is now an exact round-trip. (2) **LIKE-wildcard escape** in `searchCompanies`: user input containing `%` or `_` would behave as SQL LIKE wildcards. Patched with explicit `ESCAPE '\\'` clause + manual `% → \\%`, `_ → \\_`, `\\ → \\\\` escaping on the trimmed query. (3) **Owner counts against the cap** documented as intentional: owner is added first (load-bearing rule), then candidates fill the remaining `cap - 1` slots. Cap=50 means 50 total visible nodes (owner + 49 non-owner). Test updated to reflect this. **Three Advisor concerns deferred to v0.4.1+**: multi-company smoke (test against small / empty-current / ambiguous-name companies in addition to PwC España); EXPLAIN QUERY PLAN on the scope=ever DISTINCT query for scale concerns (fine on Strand's 1198 companies but worth a check before larger seeds); keyboard a11y on the typeahead. Cato (cross-vendor): `skipped` — codex CLI still not installed.
+
+- 2026-05-21 v0.4.0 refined (Advisor catch, commitment-boundary): **Cap is a discrete control, not a freeform integer.** Original implementation accepted any int in [1, MAX_NODE_CAP=500] server-side but the dropdown snapped to discrete options — `?cap=37` rendered as 50 in the dropdown while the SQL fetched 37. Footgun on a release whose entire point is URL-bound filters. Adopted Advisor's "server-strict" stance: cap must be one of `CAP_DROPDOWN_VALUES`; non-snap → fall back to default. URL ⇔ UI now an exact round-trip; no silent snap-on-render. MAX_NODE_CAP retained as a constant but currently unreachable; would only matter if a future "custom cap" affordance landed.
+- 2026-05-21 v0.4.0 refined (Advisor catch, commitment-boundary): **LIKE-wildcard escape on the typeahead.** `searchCompanies("%")` would have matched everything via SQLite's `LIKE` wildcard semantic. Patched with explicit `ESCAPE '\\'` clause + escaping `% → \\%`, `_ → \\_`, `\\ → \\\\` in the trimmed query before substring-wrapping. Parameter binding alone doesn't protect against this — the wildcard interpretation happens INSIDE the LIKE operator.
+- 2026-05-21 v0.4.0: **Owner counts against cap (load-bearing).** Owner is added to selectedIds first (unconditionally), then candidates fill the remaining `cap - 1` slots. Cap=50 means 50 total visible nodes including owner. This composes correctly with company filter: `?company=X&cap=50` returns ≤50 total nodes at X (or X + owner-disconnected if owner isn't at X). Documented at the candidate selection loop + verified in ISC-386.

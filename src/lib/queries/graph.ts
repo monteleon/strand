@@ -62,6 +62,12 @@ export type GraphMeta = {
   // When edgesTotal > edges.length, the UI surfaces "M of N" so the user
   // knows lower-confidence edges were dropped to keep the page responsive.
   edgesTotal?: number;
+  // v0.4.0 (ISC-374): active filters surfaced for the UI. Only populated
+  // when overridden from defaults; absent fields = default.
+  cap?: number;             // present when overridden from NODE_CAP default
+  companyId?: string;       // present when company filter is active
+  companyName?: string;     // resolved name for display (null if id unknown)
+  scope?: GraphScope;       // present when companyId is set
 };
 
 export type AssembledGraph = {
@@ -73,6 +79,8 @@ export type AssembledGraph = {
 // v0.2.0-B (Slice B) — interactive /graph filters.
 // User-controlled filters narrow the node + edge set without changing NODE_CAP
 // (the densifying-to-9k-edges hairball from the W6 Changelog stays prevented).
+export type GraphScope = "current" | "ever";
+
 export type GraphFilters = {
   kinds?: GraphEdgeKind[];   // default: all four kinds
   minConfidence?: number;    // default: HIGH_CONFIDENCE_FLOOR (0.7)
@@ -81,7 +89,26 @@ export type GraphFilters = {
   // Owner is always retained even if their degree would otherwise be 0 —
   // dropping the user's own node would render the graph meaningless.
   minDegree?: number;
+  // v0.4.0 (ISC-367..375): node cap + company-scope restriction.
+  // cap: clamps the rendered node count to [1, MAX_NODE_CAP]; default NODE_CAP.
+  // companyId: restricts the candidate set to people at this company. When
+  //   unset (or unknown id), no restriction applies.
+  // scope: when companyId is set, picks "current" (current employer only,
+  //   per the v0.3.4 ROW_NUMBER selection rule) vs "ever" (any past position
+  //   at the company). Ignored when companyId is unset. Default "current".
+  cap?: number;
+  companyId?: string;
+  scope?: GraphScope;
 };
+
+// v0.4.0: hard upper bound on cap (parallel to EDGE_CAP = 500). Cose layout
+// degrades beyond ~500 nodes and the SSR payload climbs; clamp here so a
+// URL like `?cap=99999` doesn't accidentally DoS the renderer.
+export const MAX_NODE_CAP = 500;
+// v0.4.0: dropdown snap points exposed via this list — the UI consumes it,
+// the server doesn't enforce these specific values (any int in [1, MAX] is
+// accepted; the dropdown is just a UX affordance).
+export const CAP_DROPDOWN_VALUES = [50, 100, 150, 250, 500] as const;
 
 // UI kind → DB kind for the `derived_edges.kind` enum.
 const DERIVED_DB_KIND: Record<
@@ -123,11 +150,76 @@ export async function assembleNetworkGraph(
   const derivedKinds = kinds.filter((k): k is Exclude<GraphEdgeKind, "manual"> => k !== "manual");
   const derivedDbKinds = derivedKinds.map((k) => DERIVED_DB_KIND[k]);
 
+  // v0.4.0 (ISC-368, Advisor patch): cap is a DISCRETE control — it must be
+  // one of CAP_DROPDOWN_VALUES. Anything else (including out-of-range ints,
+  // non-snap ints like 37, and non-numeric input) falls back to NODE_CAP
+  // (default). This makes URL ⇔ dropdown an exact round-trip; no silent
+  // snap-on-render, no UI/server drift. Stance (1) from the Advisor review.
+  const rawCap = filters.cap;
+  const cap =
+    typeof rawCap === "number" &&
+    Number.isFinite(rawCap) &&
+    (CAP_DROPDOWN_VALUES as readonly number[]).includes(rawCap)
+      ? rawCap
+      : NODE_CAP;
+  // v0.4.0 (ISC-369): companyId is opaque; we only know it's invalid if a
+  // later DB lookup confirms it doesn't exist. For the candidates filter, we
+  // pass the string through — if no people match, the resulting empty set
+  // produces an empty assembled graph (ISC-375), which is the right
+  // "company not found" behaviour.
+  const companyId = filters.companyId?.trim() || null;
+  const scope: GraphScope = filters.scope === "ever" ? "ever" : "current";
+
   // Owner row.
   const [tenantRow] = await db.all<{ owner_person_id: string | null }>(sql`
     SELECT owner_person_id FROM tenants WHERE id = ${tenantId} LIMIT 1
   `);
   const ownerId = tenantRow?.owner_person_id ?? null;
+
+  // v0.4.0 (ISC-370, ISC-371): when companyId is set, precompute the allowed
+  // person-id set. "current" mode uses the v0.3.4 ROW_NUMBER selection rule
+  // to pick each person's current employer; "ever" mode includes any person
+  // with any position at the company. Both are tenant-scoped — ISC-400
+  // Advisor focus.
+  let allowedPersonIds: Set<string> | null = null;
+  let companyName: string | null = null;
+  if (companyId) {
+    const [companyRow] = await db.all<{ name: string }>(sql`
+      SELECT name FROM companies WHERE tenant_id = ${tenantId} AND id = ${companyId} LIMIT 1
+    `);
+    companyName = companyRow?.name ?? null;
+    if (scope === "ever") {
+      const rows = await db.all<{ person_id: string }>(sql`
+        SELECT DISTINCT person_id FROM positions
+        WHERE tenant_id = ${tenantId} AND company_id = ${companyId}
+      `);
+      allowedPersonIds = new Set(rows.map((r) => r.person_id));
+    } else {
+      // scope = "current" — same selection chain as v0.3.4 employer lookup
+      const rows = await db.all<{ person_id: string }>(sql`
+        WITH ranked AS (
+          SELECT
+            po.person_id,
+            po.company_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY po.person_id
+              ORDER BY
+                CASE po.origin WHEN 'declared' THEN 0 ELSE 1 END,
+                po.current DESC,
+                COALESCE(po.start_date, '0000-00-00') DESC,
+                po.id ASC
+            ) AS rn
+          FROM positions po
+          WHERE po.tenant_id = ${tenantId}
+        )
+        SELECT person_id FROM ranked
+        WHERE rn = 1 AND company_id = ${companyId}
+      `);
+      allowedPersonIds = new Set(rows.map((r) => r.person_id));
+    }
+    // If the company has zero matching people, short-circuit to empty —
+    // owner is still added below per ISC-373 (rendered disconnected).
+  }
 
   // Candidate people: incident manual OR incident derived edges that pass the
   // confidence + kind filters. We keep their best incident confidence so we
@@ -181,16 +273,26 @@ export async function assembleNetworkGraph(
     ORDER BY best_confidence DESC, edge_count DESC
   `);
 
-  // Owner is always in (even if no incident edges).
+  // v0.4.0 (ISC-372): filter THEN cap. Apply the company-scope filter first
+  // (narrows the candidate list), then take the top `cap` entries. "100 at
+  // PwC España" yields ≤100 at PwC, not "100 candidates of which some are at
+  // PwC". The set may be smaller than `cap` if the filter is restrictive.
+  // v0.4.0 (ISC-373): owner is always in, unconditionally, AFTER candidate
+  // selection. With a company filter active, owner may render disconnected
+  // (their cluster colour empty) — that's the correct behaviour. The user
+  // asked "who at X" and they aren't there.
+  const filteredCandidates = allowedPersonIds
+    ? candidates.filter((c) => allowedPersonIds!.has(c.person_id))
+    : candidates;
   const selectedIds = new Set<string>();
   if (ownerId) selectedIds.add(ownerId);
-  for (const c of candidates) {
-    if (selectedIds.size >= NODE_CAP) break;
+  for (const c of filteredCandidates) {
+    if (selectedIds.size >= cap) break;
     selectedIds.add(c.person_id);
   }
 
   if (selectedIds.size === 0) {
-    return emptyAssembled(minConfidence, candidates.length);
+    return emptyAssembled(minConfidence, filteredCandidates.length);
   }
 
   // Fetch node metadata + each person's "current employer" for cluster colour.
@@ -392,13 +494,18 @@ export async function assembleNetworkGraph(
       // matches the slider position rather than the project-default constant.
       highConfidenceFloor: minConfidence,
       edgeFloor: minConfidence,
-      candidateCount: candidates.length,
+      candidateCount: filteredCandidates.length,
       selectedCount: nodes.length,
       totalEdges: finalEdges.length,
       // `edgesTotal` is the pre-cap count from the SQL fetch + manual edges
       // pre-min-degree. Only surfaces when actually larger than the rendered
       // set so the UI can show "M of N" only when the cap kicks in.
       edgesTotal: edgesTotal > finalEdges.length ? edgesTotal : undefined,
+      // v0.4.0 (ISC-374): expose active filters only when overridden.
+      ...(cap !== NODE_CAP ? { cap } : {}),
+      ...(companyId
+        ? { companyId, companyName: companyName ?? undefined, scope }
+        : {}),
     },
   };
 }
