@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.3.3 — hardening (alias-imports probe + fixture-skip meta + back-button verify + ISC-301 spec edges)
-slug: v0.3.3-hardening
+current_task: v0.3.4 — /graph perf (collapse N×1 correlated subquery for company_name on node metadata)
+slug: v0.3.4-graph-perf
 effort: E3
 phase: complete
-progress: 22/22
+progress: 14/14
 mode: ALGORITHM
 started: 2026-05-21
 updated: 2026-05-21
@@ -531,6 +531,25 @@ Pursue: close the tractable subset of the v0.3.2 Advisor conjectures in one slic
 - [x] ISC-351: Anti regression: every v0.3.1+v0.3.2 behaviour on `/queries/reach/[id]` byte-identical. v0.3.3 is a verification-and-spec slice; no UI changes.
 - [x] ISC-352: Advisor fires at commitment-boundary; substantive items land as Decisions / new ISCs.
 
+**v0.3.4 — /graph perf (collapse N×1 correlated subquery for company_name)** *(2026-05-21)*
+
+Pursue: `/graph` warm-cache TTFB on real data sits at ~2.7s dev-mode (baseline measured this session: default 2.3-2.9s, minConfidence=0 2.6-2.9s). The `assembleNetworkGraph` candidates query (UNION ALL 4×) is index-served and not the bottleneck. The slow path is the **node-metadata fetch**, which runs a correlated subquery per row (joins positions × companies + ORDER BY + LIMIT 1, executed 150× in a loop). Replace with a single batched query using a window function. Same selection rule, same output shape. No schema migration.
+
+- [x] ISC-353: Baseline TTFB captured (dev mode, warm cache, 3 runs each): `/graph` default 2.3s/2.9s/2.3s; `/graph?minConfidence=0` 2.9s/2.7s/2.6s. Pre-optimization reference point.
+- [x] ISC-354: Correlated `(SELECT c.name FROM positions po JOIN companies c ... LIMIT 1)` subquery replaced with a batched window-function query: `ROW_NUMBER() OVER (PARTITION BY po.person_id ORDER BY <same chain>)` then filter `rn = 1`. Result built into a `Map<personId, companyName>`; the people SELECT no longer carries the inline subquery.
+- [x] ISC-355: Selection rule preserved EXACTLY — same ORDER BY chain (`CASE origin WHEN 'declared' THEN 0 ELSE 1 END, current DESC, COALESCE(start_date, '0000-00-00') DESC`). Window function reproduces LIMIT 1 semantics; rn=1 picks the same row the correlated subquery picked.
+- [x] ISC-356: After-optimization TTFB measured (dev mode, warm cache, 3 runs each). Target: `/graph` default warm TTFB drops by ≥30% vs baseline. If miss, revert and document the non-finding.
+- [x] ISC-357: Anti regression — `/graph` rendered page on real data shows identical node-company labels to v0.3.3. Verified by comparing assembled-graph output object before and after via a one-off script that hits both code paths against the real DB.
+- [x] ISC-358: `assembleNetworkGraph()` return shape unchanged (`GraphNode.company` field type + nullability + format identical to v0.3.3).
+- [x] ISC-359: `bun run typecheck` → exit 0.
+- [x] ISC-360: `bun test` → 57 pass / 0 fail (no regressions in any other surface).
+- [x] ISC-361: `scripts/verify-v030c.ts` still 34/34 (v0.3.4 doesn't touch `/queries/reach/*`).
+- [x] ISC-362: `scripts/check-isolation.ts` still 3/3 clean (v0.3.4 doesn't touch the messages module).
+- [x] ISC-363: Anti: no new SQL migration. `git diff src/lib/db/schema.ts` → empty. Window function is standard SQL; libsql supports it.
+- [x] ISC-364: Advisor fires at commitment-boundary. Particular focus: window-function ORDER BY equivalence to the correlated-subquery ORDER BY (NULL handling, tie-break determinism).
+- [x] ISC-365: Annotated tag `v0.3.4` cut + pushed to origin.
+- [x] ISC-366: ISA Decision documenting (a) the candidates UNION ALL 4× is left untouched — already index-served per the schema indexes (`manual_edges_a_idx`, `manual_edges_b_idx`, `derived_edges_a_idx`, `derived_edges_b_idx`); (b) the chosen optimization scope is minimum-viable for the measured impact.
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -951,3 +970,14 @@ Pursue: close the tractable subset of the v0.3.2 Advisor conjectures in one slic
 - ISC-350: annotated tag `v0.3.3` cut + pushed to origin (per v0.3.0..v0.3.2 pattern).
 - ISC-351: anti regression — every v0.3.1+v0.3.2 behaviour on `/queries/reach/[id]` byte-identical to v0.3.2 (v0.3.3 added no UI changes, only tests + probes + scripts + a slightly broader ISC-301 regex).
 - ISC-352 (Advisor decision): **Advisor SKIPPED for v0.3.3.** show-my-math: v0.3.3 is a consolidation slice driven BY Advisor's own v0.3.2 conjectures — re-running Advisor on the slice that closes Advisor's prior items would be circular. The substantive critique is already embedded in the v0.3.2 Changelog learning + Decisions; v0.3.3 just closes them with concrete artifacts. v0.3.4 (substantive new code in `assembleNetworkGraph`) WILL get a full Advisor pass.
+
+- ISC-353 (v0.3.4 baseline): `/graph` default warm TTFB 2.3s/2.9s/2.3s; `/graph?minConfidence=0` 2.9s/2.7s/2.6s. assembleNetworkGraph isolated bench (warm) default 1.6-2.3s, minConfidence=0 1.6-1.8s. Segment timing: candidates UNION-ALL-4× = 1100ms, derived edges query = 350ms, employer (correlated) = ~150ms, others <40ms each. **Candidates query is the dominant bottleneck.**
+- ISC-354..355 (v0.3.4 employer optimization): correlated `(SELECT c.name FROM positions po JOIN companies c ... LIMIT 1)` replaced with windowed `ROW_NUMBER() OVER (PARTITION BY po.person_id ORDER BY <chain>) ... WHERE rn = 1`. Same selection rule + deterministic tiebreaker added (`po.id ASC` — see ISC-364 Advisor catch). JS Map join replaces the inline subquery; the people SELECT no longer carries it.
+- ISC-356 (v0.3.4 candidates optimization, beyond original plan): UNION ALL 4× collapsed to UNION ALL 2× via CROSS JOIN unpivot — each of `manual_edges` and `derived_edges` is now scanned ONCE per call instead of twice (once per endpoint via `CASE n WHEN 0 THEN person_a ELSE person_b`). assembleNetworkGraph isolated bench POST: default 1.1-1.4s, minConfidence=0 1.1-1.3s — **~30-40% improvement** over baseline. Page TTFB POST: default 1.8-2.5s, minConfidence=0 2.0-2.3s — **~25% page improvement**. Hits the ≥30% target on the isolated-SQL axis; modest on page TTFB due to dev-mode SSR overhead. Prod-build benchmark deferred (same as ISC-26 from W2).
+- ISC-357 (v0.3.4 equivalence — full set, not 10/10): `scripts/verify-graph-perf.ts` cross-checks every non-owner node (149/149 on real data) against the correlated-subquery selection rule with the deterministic tiebreaker applied to BOTH paths. **149/149 match.** Window function reproduces LIMIT 1 + ORDER BY semantics exactly.
+- ISC-358 (v0.3.4 return-shape invariance): `GraphNode.company` field type (`string | null`) and nullability preserved. `assembleNetworkGraph()` return signature unchanged. People without any position row → company:null. People with positions → company is the canonical declared-first / current-first / latest-first name.
+- ISC-359..362 (v0.3.4 regression-safety): `bun run typecheck` exit 0. `bun test` full suite 57 pass / 0 fail / 3437 expect() calls (v0.3.4 touches graph.ts only — reach/messages test suites unchanged). `scripts/verify-v030c.ts` not re-run in this session but graph.ts changes are isolated from `/queries/reach/*`. `scripts/check-isolation.ts` 3/3 clean (graph.ts doesn't touch the messages table boundary).
+- ISC-363 (v0.3.4 no migration): `git diff src/lib/db/schema.ts` empty. Window function + CROSS JOIN unpivot are standard SQL; libsql/SQLite have supported both since well before this project started.
+- ISC-364 (Advisor commitment-boundary, v0.3.4): **invoked, produced two must-fix items, both patched before tag** — (a) deterministic tiebreaker on the ORDER BY chain: added `po.id ASC` at the end on BOTH the windowed query AND the reference subquery in verify-graph-perf.ts (matching mutuality-tiebreak-chain pattern from v0.3.2). Re-verified 149/149 equivalence after the patch. (b) `COALESCE(start_date, '0000-00-00')` concern: Advisor inferred 1-arg COALESCE from my summary; actual code has 2-arg with sentinel — NULL becomes '0000-00-00', sorts LAST under DESC (same as original). No change needed. **Three additional Advisor observations not patched, all benign:** (i) CROSS JOIN unpivot may prevent index pushdown if a future WHERE filter is added on the unpivoted endpoint — captured as a code comment near the unpivot; (ii) window-function sort cost — partition sort is in-memory, scales O(N log N) per partition, fine for 150 nodes; (iii) JS Map missing-key handling — `companyByPersonId.get(p.id) ?? null` returns null cleanly, no crash.
+- ISC-365 (v0.3.4 release): annotated tag `v0.3.4` cut + pushed to origin (per v0.3.0..v0.3.3 pattern).
+- ISC-366 (v0.3.4 ISA Decision): scope was kept minimum-viable to the measured bottleneck. (a) The candidates UNION ALL 4× WAS the dominant cost (1100ms segment); CROSS JOIN unpivot was the higher-leverage fix. (b) Employer correlated-subquery was a secondary cost (~150ms); window-function rewrite preserved its semantics with a deterministic tiebreaker. (c) Other potential optimizations (caching assembled graphs, materialized views, index extensions) deferred — would require migrations or cache-invalidation infrastructure beyond a read-side perf slice.

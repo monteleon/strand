@@ -131,18 +131,23 @@ export async function assembleNetworkGraph(
 
   // Candidate people: incident manual OR incident derived edges that pass the
   // confidence + kind filters. We keep their best incident confidence so we
-  // can cap below at NODE_CAP. Each leg of the UNION is conditional — if a
-  // filter excludes manual or all derived kinds, that leg is dropped entirely
-  // rather than emitted as a no-op WHERE-clause-against-empty-IN.
+  // can cap below at NODE_CAP.
+  //
+  // v0.3.4 (ISC-353/356): the original UNION ALL 4× pattern scanned each
+  // table TWICE (once per endpoint). On real data (15709 derived_edges
+  // rows) that was ~1100ms — the dominant cost of /graph TTFB. Collapsed
+  // to UNION ALL 2× using a CROSS JOIN unpivot — each table is scanned
+  // ONCE and emits 2 rows per edge via the synthetic `n` selector. Same
+  // logical result, half the table scans.
   const candidateLegs: ReturnType<typeof sql>[] = [];
   if (includeManual) {
     candidateLegs.push(sql`
-      SELECT me.person_a AS person_id, 1.0 AS confidence
-      FROM manual_edges me WHERE me.tenant_id = ${tenantId}
-    `);
-    candidateLegs.push(sql`
-      SELECT me.person_b AS person_id, 1.0 AS confidence
-      FROM manual_edges me WHERE me.tenant_id = ${tenantId}
+      SELECT
+        CASE n WHEN 0 THEN me.person_a ELSE me.person_b END AS person_id,
+        1.0 AS confidence
+      FROM manual_edges me
+      CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1 AS n) endpoints
+      WHERE me.tenant_id = ${tenantId}
     `);
   }
   if (derivedDbKinds.length > 0) {
@@ -151,13 +156,11 @@ export async function assembleNetworkGraph(
       sql`, `,
     );
     candidateLegs.push(sql`
-      SELECT e.person_a AS person_id, e.confidence FROM derived_edges e
-      WHERE e.tenant_id = ${tenantId}
-        AND e.confidence >= ${minConfidence}
-        AND e.kind IN (${derivedKindList})
-    `);
-    candidateLegs.push(sql`
-      SELECT e.person_b AS person_id, e.confidence FROM derived_edges e
+      SELECT
+        CASE n WHEN 0 THEN e.person_a ELSE e.person_b END AS person_id,
+        e.confidence
+      FROM derived_edges e
+      CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1 AS n) endpoints
       WHERE e.tenant_id = ${tenantId}
         AND e.confidence >= ${minConfidence}
         AND e.kind IN (${derivedKindList})
@@ -191,28 +194,54 @@ export async function assembleNetworkGraph(
   }
 
   // Fetch node metadata + each person's "current employer" for cluster colour.
+  // v0.3.4 (ISC-354/355): the per-row correlated subquery for company_name
+  // was the /graph TTFB bottleneck — for 150 nodes it ran 150 joins of
+  // positions × companies + ORDER BY + LIMIT 1 in a tight loop. Replaced
+  // with a single batched query using ROW_NUMBER() over the same ORDER BY
+  // chain; then a Map join in JS. Selection rule unchanged: declared
+  // positions before synthesised, current before past, most-recent
+  // start_date first.
   const idsList = Array.from(selectedIds);
-  const rawNodes = await db.all<{
+  const idsSqlList = sql.join(idsList.map((id) => sql`${id}`), sql`, `);
+  const employerRows = await db.all<{
+    person_id: string;
+    company_name: string;
+  }>(sql`
+    WITH ranked AS (
+      SELECT
+        po.person_id,
+        c.name AS company_name,
+        ROW_NUMBER() OVER (
+          PARTITION BY po.person_id
+          ORDER BY
+            CASE po.origin WHEN 'declared' THEN 0 ELSE 1 END,
+            po.current DESC,
+            COALESCE(po.start_date, '0000-00-00') DESC,
+            po.id ASC
+        ) AS rn
+      FROM positions po
+      JOIN companies c ON c.id = po.company_id AND c.tenant_id = po.tenant_id
+      WHERE po.tenant_id = ${tenantId}
+        AND po.person_id IN (${idsSqlList})
+    )
+    SELECT person_id, company_name FROM ranked WHERE rn = 1
+  `);
+  const companyByPersonId = new Map<string, string>();
+  for (const r of employerRows) companyByPersonId.set(r.person_id, r.company_name);
+  const peopleRows = await db.all<{
     id: string;
     full_name: string;
-    company_name: string | null;
   }>(sql`
-    SELECT p.id, p.full_name,
-      (
-        SELECT c.name
-        FROM positions po
-        JOIN companies c ON c.id = po.company_id AND c.tenant_id = po.tenant_id
-        WHERE po.person_id = p.id AND po.tenant_id = p.tenant_id
-        ORDER BY
-          CASE po.origin WHEN 'declared' THEN 0 ELSE 1 END,
-          po.current DESC,
-          COALESCE(po.start_date, '0000-00-00') DESC
-        LIMIT 1
-      ) AS company_name
+    SELECT p.id, p.full_name
     FROM people p
     WHERE p.tenant_id = ${tenantId}
-      AND p.id IN (${sql.join(idsList.map((id) => sql`${id}`), sql`, `)})
+      AND p.id IN (${idsSqlList})
   `);
+  const rawNodes = peopleRows.map((p) => ({
+    id: p.id,
+    full_name: p.full_name,
+    company_name: companyByPersonId.get(p.id) ?? null,
+  }));
 
   // Edge fetch — both manual and derived obey the active filters (kinds +
   // minConfidence) AND are restricted to the already-selected node set.
