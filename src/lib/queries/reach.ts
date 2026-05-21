@@ -8,6 +8,17 @@
 import { and, eq, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { getOwnerId } from "./people";
+import {
+  getMessageCountsByPeople,
+  listLastContactByPeople,
+} from "./messages";
+
+// v0.3.0-C: warmth is a third epistemic category. It is observed (frequency +
+// recency of past messages with the intermediary), not asserted/inferred.
+// Composed onto every candidate ALWAYS (zero-when-none); never blended into
+// `score`. The `sort` param is the user's question: "rank by epistemic
+// strength (default)" vs "rank by relationship warmth".
+export type ReachSort = "epistemic" | "warmth";
 
 export type ReachCandidate = {
   intermediaryId: string;
@@ -15,6 +26,15 @@ export type ReachCandidate = {
   intermediaryHeadline: string | null;
   via: "manual" | "derived";
   score: number;
+  // v0.3.0-C: warmth signal. ALWAYS present on every candidate (render-zeros-
+  // not-absence — see feedback_render_zeros_not_absence.md). Zero-message
+  // intermediaries get {sent:0, received:0, total:0, lastAt:null}.
+  messages: {
+    sent: number;
+    received: number;
+    total: number;
+    lastAt: Date | null;
+  };
   // For manual edges: the user's note (may be null).
   note?: string | null;
   // For derived edges: the strongest single edge's evidence.
@@ -43,9 +63,17 @@ export type ReachResult = {
   status: ReachStatus;
 };
 
+// v0.3.0-C: sort param is forgiving — unknown / undefined / null falls back
+// to "epistemic" (matches ISC-257 unknown-sort safety from v0.3.0-B).
+export function parseReachSort(raw: string | string[] | undefined): ReachSort {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === "warmth" ? "warmth" : "epistemic";
+}
+
 export async function findReachToPerson(
   targetId: string,
   tenantId: string = LOCAL_TENANT_ID,
+  sort: ReachSort = "epistemic",
 ): Promise<ReachResult | null> {
   const [target] = await db
     .select()
@@ -161,6 +189,7 @@ export async function findReachToPerson(
       intermediaryHeadline: m.other_headline,
       via: "manual",
       score: 1.0,
+      messages: { sent: 0, received: 0, total: 0, lastAt: null },
       note: m.note,
     });
   }
@@ -176,6 +205,7 @@ export async function findReachToPerson(
         intermediaryHeadline: d.other_headline,
         via: "derived",
         score: d.confidence,
+        messages: { sent: 0, received: 0, total: 0, lastAt: null },
         companyId: d.company_id,
         companyName: d.company_name,
         overlapMonths: months,
@@ -184,7 +214,50 @@ export async function findReachToPerson(
     }
   }
 
+  // v0.3.0-C: compose warmth via two batch calls (ISC-274 / ISC-275 — no
+  // N+1). Intermediaries with no message history keep their zero defaults
+  // (ISC-273 — render-zeros-not-absence per
+  // feedback_render_zeros_not_absence.md). reach.ts NEVER touches the
+  // `messages` table directly — ISC-289 SQL-reference grep enforces.
+  const intermediaryIds = Array.from(byIntermediary.keys());
+  if (intermediaryIds.length > 0) {
+    const [counts, lastContacts] = await Promise.all([
+      getMessageCountsByPeople(intermediaryIds, tenantId),
+      listLastContactByPeople(intermediaryIds, tenantId),
+    ]);
+    for (const id of intermediaryIds) {
+      const cand = byIntermediary.get(id);
+      if (!cand) continue;
+      const c = counts.get(id);
+      const lastAt = lastContacts.get(id) ?? null;
+      if (c || lastAt) {
+        cand.messages = {
+          sent: c?.sent ?? 0,
+          received: c?.received ?? 0,
+          total: c?.total ?? 0,
+          lastAt,
+        };
+      }
+    }
+  }
+
   const candidates = Array.from(byIntermediary.values()).sort((a, b) => {
+    // v0.3.0-C: ISC-277 — warmth ordering by messages.total DESC, then
+    // messages.lastAt DESC (nulls last), then epistemic score DESC, then
+    // name ASC. ISC-278 — warmth NEVER mixes into `score`; both fields
+    // stay independent on every candidate.
+    if (sort === "warmth") {
+      if (b.messages.total !== a.messages.total) {
+        return b.messages.total - a.messages.total;
+      }
+      const aLast = a.messages.lastAt?.getTime() ?? -Infinity;
+      const bLast = b.messages.lastAt?.getTime() ?? -Infinity;
+      if (bLast !== aLast) return bLast - aLast;
+      if (b.score !== a.score) return b.score - a.score;
+      return a.intermediaryName.localeCompare(b.intermediaryName);
+    }
+    // sort === "epistemic" (default) — pre-v0.3.0-C behaviour byte-identical
+    // (ISC-276 regression-safety claim).
     if (b.score !== a.score) return b.score - a.score;
     // Manual ranks above derived at the same score (defensive: should not
     // happen since manual is fixed at 1.0).

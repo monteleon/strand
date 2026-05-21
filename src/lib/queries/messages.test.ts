@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   formatDateYMD,
+  getMessageCountsByPeople,
   getMessageStatsForPerson,
   listAllLastContactDesc,
   listLastContactByPeople,
@@ -122,6 +123,36 @@ describe("v0.3.0-B: messages queries", () => {
       SELECT MAX(sent_at) AS m FROM messages WHERE tenant_id = 'local'
     `);
     expect(ordered[0]!.lastAt.getTime()).toBe(Number(maxRow!.m) * 1000);
+  });
+
+  test("ISC-268..271 (v0.3.0-C): getMessageCountsByPeople — top contact counts match getMessageStatsForPerson exactly", async () => {
+    const top = await topContactByVolume();
+    const stats = await getMessageStatsForPerson(top.id);
+    const counts = await getMessageCountsByPeople([top.id]);
+    const c = counts.get(top.id);
+    expect(c).toBeDefined();
+    if (c) {
+      expect(c.sent).toBe(stats.sent);
+      expect(c.received).toBe(stats.received);
+      expect(c.total).toBe(stats.total);
+      expect(c.sent + c.received).toBe(c.total);
+    }
+  });
+
+  test("ISC-272 (v0.3.0-C): getMessageCountsByPeople — missing people are absent from Map (caller substitutes zeros)", async () => {
+    const top = await topContactByVolume();
+    const counts = await getMessageCountsByPeople([
+      top.id,
+      "00000000-no-such-person",
+    ]);
+    expect(counts.size).toBe(1);
+    expect(counts.has(top.id)).toBe(true);
+    expect(counts.has("00000000-no-such-person")).toBe(false);
+  });
+
+  test("ISC-270 (v0.3.0-C): getMessageCountsByPeople — empty input returns empty Map (no SQL fired)", async () => {
+    const counts = await getMessageCountsByPeople([]);
+    expect(counts.size).toBe(0);
   });
 
   test("formatDateYMD: produces YYYY-MM-DD slice from Date", () => {

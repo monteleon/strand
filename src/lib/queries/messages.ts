@@ -145,6 +145,54 @@ export async function listLastContactByPeople(
   return result;
 }
 
+// ISC-268..272 (v0.3.0-C): batch-load Map<personId, {sent, received, total}>
+// for the reach-composition warmth signal. Owner-perspective `sent`/`received`
+// follows the same semantics as getMessageStatsForPerson (sent = owner sent
+// TO the other person; received = other sent TO owner). Single SQL round-trip
+// via sql.join + GROUP BY — no N+1. People with zero messages are absent
+// from the returned Map; caller substitutes zeros (matches
+// listLastContactByPeople's contract — render-zeros-not-absence is the
+// caller's responsibility, not this helper's).
+export async function getMessageCountsByPeople(
+  personIds: string[],
+  tenantId: string = LOCAL_TENANT_ID,
+): Promise<Map<string, { sent: number; received: number; total: number }>> {
+  const result = new Map<string, { sent: number; received: number; total: number }>();
+  if (personIds.length === 0) return result;
+
+  const idList = sql.join(
+    personIds.map((p) => sql`${p}`),
+    sql`, `,
+  );
+  const rows = await db.all<{
+    other_id: string;
+    sent: number;
+    received: number;
+    total: number;
+  }>(sql`
+    SELECT
+      CASE WHEN direction = 'sent' THEN to_person_id ELSE from_person_id END AS other_id,
+      COALESCE(SUM(CASE WHEN direction = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+      COALESCE(SUM(CASE WHEN direction = 'received' THEN 1 ELSE 0 END), 0) AS received,
+      COUNT(*) AS total
+    FROM messages
+    WHERE tenant_id = ${tenantId}
+      AND (
+        (direction = 'sent' AND to_person_id IN (${idList})) OR
+        (direction = 'received' AND from_person_id IN (${idList}))
+      )
+    GROUP BY other_id
+  `);
+  for (const r of rows) {
+    result.set(r.other_id, {
+      sent: Number(r.sent),
+      received: Number(r.received),
+      total: Number(r.total),
+    });
+  }
+  return result;
+}
+
 // ISC-266 (Advisor 2026-05-20): tenant-wide ordered list of (personId,
 // lastAt) for all people-with-messages. Lets the /people list module sort
 // the global cohort by last-contact WITHOUT reaching into the messages

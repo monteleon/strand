@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { findReachToPerson } from "@/lib/queries/reach";
+import { findReachToPerson, parseReachSort } from "@/lib/queries/reach";
 import { confidenceLabel } from "@/lib/queries/derivedEdges";
 import { listSavedQueries } from "@/lib/queries/savedQueries";
+import { formatDateYMD } from "@/lib/queries/messages";
 import { SaveBookmark } from "@/components/save-bookmark";
 import { SavedQueriesSidebar } from "@/components/saved-queries-sidebar";
 
@@ -10,13 +11,21 @@ export const dynamic = "force-dynamic";
 
 export default async function ReachDetailPage({
   params,
+  searchParams,
 }: {
   params: { id: string };
+  searchParams?: { sort?: string | string[] };
 }) {
-  const result = await findReachToPerson(params.id);
+  const sort = parseReachSort(searchParams?.sort);
+  const result = await findReachToPerson(params.id, "local", sort);
   if (!result) notFound();
   const bookmarks = await listSavedQueries();
-  const url = `/queries/reach/${result.target.id}`;
+  // ISC-283 / ISC-297: bookmark URL preserves the sort param so the saved
+  // query round-trips with the user's ranking choice intact.
+  const url =
+    sort === "warmth"
+      ? `/queries/reach/${result.target.id}?sort=warmth`
+      : `/queries/reach/${result.target.id}`;
 
   return (
     <div className="min-h-screen bg-canvas text-text-primary">
@@ -73,9 +82,40 @@ export default async function ReachDetailPage({
             )}
 
             <section className="mt-6" data-testid="reach-candidates-section">
-              <h2 className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
-                Strongest reach
-              </h2>
+              <div className="flex items-baseline justify-between gap-3">
+                <h2 className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
+                  {sort === "warmth" ? "Warmest reach" : "Strongest reach"}
+                </h2>
+                <div
+                  data-testid="reach-sort-toggle"
+                  className="flex items-center gap-1 rounded-sm border border-border-subtle bg-surface p-0.5 font-mono text-[10px] uppercase tracking-wide"
+                >
+                  <Link
+                    href={`/queries/reach/${result.target.id}`}
+                    data-testid="reach-sort-epistemic"
+                    aria-pressed={sort === "epistemic"}
+                    className={
+                      sort === "epistemic"
+                        ? "rounded-sm bg-accent-signal/15 px-2 py-0.5 text-accent-signal"
+                        : "rounded-sm px-2 py-0.5 text-text-tertiary transition-colors duration-fast ease-cubic-out hover:text-text-secondary"
+                    }
+                  >
+                    Epistemic
+                  </Link>
+                  <Link
+                    href={`/queries/reach/${result.target.id}?sort=warmth`}
+                    data-testid="reach-sort-warmth"
+                    aria-pressed={sort === "warmth"}
+                    className={
+                      sort === "warmth"
+                        ? "rounded-sm bg-accent-warmth/15 px-2 py-0.5 text-accent-warmth"
+                        : "rounded-sm px-2 py-0.5 text-text-tertiary transition-colors duration-fast ease-cubic-out hover:text-text-secondary"
+                    }
+                  >
+                    Warmth
+                  </Link>
+                </div>
+              </div>
               {result.status.candidates.length === 0 ? (
                 <p
                   data-testid="reach-empty"
@@ -139,6 +179,19 @@ export default async function ReachDetailPage({
                                 : " · same employer, no overlap window"}
                           </p>
                         )}
+                        <p
+                          data-testid="reach-warmth"
+                          data-warmth-total={c.messages.total}
+                          className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-tertiary"
+                        >
+                          {c.messages.total > 0
+                            ? `${c.messages.total} msgs${
+                                c.messages.lastAt
+                                  ? ` · last ${formatDateYMD(c.messages.lastAt)}`
+                                  : ""
+                              }`
+                            : "—"}
+                        </p>
                       </Link>
                     </li>
                   ))}
