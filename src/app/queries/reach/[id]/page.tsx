@@ -22,10 +22,20 @@ export default async function ReachDetailPage({
   const bookmarks = await listSavedQueries();
   // ISC-283 / ISC-297: bookmark URL preserves the sort param so the saved
   // query round-trips with the user's ranking choice intact.
+  // v0.3.2: extended for sort=mutuality.
   const url =
     sort === "warmth"
       ? `/queries/reach/${result.target.id}?sort=warmth`
-      : `/queries/reach/${result.target.id}`;
+      : sort === "mutuality"
+        ? `/queries/reach/${result.target.id}?sort=mutuality`
+        : `/queries/reach/${result.target.id}`;
+  // v0.3.2: ISC-318 heading reflects active sort
+  const heading =
+    sort === "warmth"
+      ? "Warmest reach"
+      : sort === "mutuality"
+        ? "Most mutual reach"
+        : "Strongest reach";
 
   return (
     <div className="min-h-screen bg-canvas text-text-primary">
@@ -84,7 +94,7 @@ export default async function ReachDetailPage({
             <section className="mt-6" data-testid="reach-candidates-section">
               <div className="flex items-baseline justify-between gap-3">
                 <h2 className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
-                  {sort === "warmth" ? "Warmest reach" : "Strongest reach"}
+                  {heading}
                 </h2>
                 <div
                   data-testid="reach-sort-toggle"
@@ -113,6 +123,18 @@ export default async function ReachDetailPage({
                     }
                   >
                     Warmth
+                  </Link>
+                  <Link
+                    href={`/queries/reach/${result.target.id}?sort=mutuality`}
+                    data-testid="reach-sort-mutuality"
+                    aria-pressed={sort === "mutuality"}
+                    className={
+                      sort === "mutuality"
+                        ? "rounded-sm bg-accent-signal/15 px-2 py-0.5 text-text-primary"
+                        : "rounded-sm px-2 py-0.5 text-text-tertiary transition-colors duration-fast ease-cubic-out hover:text-text-secondary"
+                    }
+                  >
+                    Mutuality
                   </Link>
                 </div>
               </div>
@@ -179,19 +201,30 @@ export default async function ReachDetailPage({
                                 : " · same employer, no overlap window"}
                           </p>
                         )}
-                        <p
-                          data-testid="reach-warmth"
-                          data-warmth-total={c.messages.total}
-                          className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-tertiary"
-                        >
-                          {c.messages.total > 0
-                            ? `${c.messages.total} msgs${
-                                c.messages.lastAt
-                                  ? ` · last ${formatDateYMD(c.messages.lastAt)}`
-                                  : ""
-                              }`
-                            : "—"}
-                        </p>
+                        <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                          <p
+                            data-testid="reach-warmth"
+                            data-warmth-total={c.messages.total}
+                            className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary"
+                          >
+                            {c.messages.total > 0
+                              ? `${c.messages.total} msgs${
+                                  c.messages.lastAt
+                                    ? ` · last ${formatDateYMD(c.messages.lastAt)}`
+                                    : ""
+                                }`
+                              : "—"}
+                          </p>
+                          <p
+                            data-testid="reach-mutuality"
+                            data-mutuality={c.messages.mutuality}
+                            className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary"
+                          >
+                            {c.messages.mutuality > 0
+                              ? `↔ ${c.messages.mutuality}`
+                              : "—"}
+                          </p>
+                        </div>
                       </Link>
                     </li>
                   ))}

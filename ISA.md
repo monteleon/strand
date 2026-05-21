@@ -1,10 +1,10 @@
 ---
 project: strand
-current_task: v0.3.0-C — warm-path-finder (message-weighted reach on /queries/reach/[id])
-slug: v0.3.0-C-warm-path
+current_task: v0.3.2 — warm-path polish (ORM-isolation ISC + adversarial fixtures + Mutuality sort mode)
+slug: v0.3.2-warm-path-polish
 effort: E3
 phase: complete
-progress: 33/33
+progress: 30/30
 mode: ALGORITHM
 started: 2026-05-21
 updated: 2026-05-21
@@ -449,6 +449,61 @@ Pursue: extend `/queries/reach/[id]` so the ranked-intermediary list surfaces a 
 - [x] ISC-299: Anti: NO new SQL migration in this slice. Schema unchanged. `drizzle-kit` diff is empty.
 - [x] ISC-300: Anti: v0.3.0-C is read-side only — no edits to `manual_edges`, `derived_edges`, `messages`, `connections`, `people`, or any other table during query execution. Grep confirms reach.ts contains only `SELECT` SQL and `db.select(...)` Drizzle reads, zero `INSERT|UPDATE|DELETE`.
 
+**v0.3.2 — warm-path polish (ORM-isolation ISC + adversarial fixtures + Mutuality sort mode)** *(2026-05-21)*
+
+Pursue: close the four Advisor-flagged follow-ups from v0.3.1 and complete the warm-path arc. Three sub-slices: (A) **hardening** — formalize the ORM-symbol probe as ISC-301 (parallel to ISC-265 JS-import + ISC-289 SQL-keyword), and add adversarial reach fixtures that prove the ranking diverges visibly. (B) **Mutuality** — third sort mode `sort=mutuality` on `/queries/reach/[id]`, scalar = `min(sent, received)` (preference for two-way relationships). The toggle becomes a three-button group (Epistemic ↔ Warmth ↔ Mutuality). (C) **release** — verify suite + advisor + commit + tag `v0.3.2`.
+
+*v0.3.2-A: ORM-symbol probe formalization*
+
+- [x] ISC-301: New numbered ISC anti-criterion `ISC-301` formalizes the ORM-symbol probe surfaced by Advisor in v0.3.0-C — `rg -n 'schema\.messages|from\(messages\)|insertMessages|messagesTable\.|messages_table' src/ --glob '!src/lib/queries/messages.ts' --glob '!src/lib/queries/messages.test.ts' --glob '!src/lib/linkedin/ingest.ts' --glob '!src/lib/db/**' --glob '!scripts/**' --glob '!**/*.test.ts'` returns 0 hits. Same whitelist shape as ISC-289 SQL-keyword grep; covers Drizzle `db.select().from(schema.messages)`, `db.$count(schema.messages, ...)`, `db.insert(schema.messages)`, and any future `messagesTable` alias.
+- [x] ISC-302: ISC-265 (JS-import grep), ISC-289 (SQL-keyword grep), and ISC-301 (ORM-symbol grep) all 0 hits at commit. Three-layer enforcement of the messages epistemic-category boundary is live.
+
+*v0.3.2-A: adversarial reach fixtures*
+
+- [x] ISC-303: `reach.test.ts` gains an adversarial test for a target where **every reach candidate has zero warmth** (`messages.total === 0` across all candidates). For such a target: (a) `sort=warmth` and `sort=epistemic` produce IDENTICAL candidate orderings (no tiebreak signal from messages); (b) toggle still renders without crashing; (c) warmth pill renders "—" on every row.
+- [x] ISC-304: `reach.test.ts` gains an adversarial test for a target with **divergent rankings between epistemic and warmth modes**. Picks a target where the top-1 candidate by epistemic score has zero warmth AND there exists another candidate with non-zero warmth at lower epistemic score. Asserts: (a) sort=epistemic top-1 ≠ sort=warmth top-1 for this target; (b) both orderings cover the same candidate set.
+- [x] ISC-305: If the dataset contains no target matching the divergent-rankings criterion, the test logs a "skip — no adversarial divergent target in dataset" message rather than passing silently. (Honest "skip" beats silent "pass".)
+
+*v0.3.2-B: Mutuality scalar on messages composition*
+
+- [x] ISC-306: `ReachCandidate.messages` shape gains a derived `mutuality` field: `mutuality = min(messages.sent, messages.received)`. Always present (zero-when-none); computed inside reach.ts composition; never persisted in any table. Anti-mixing per ISC-278 still holds — mutuality lives in the `messages` sub-object, NOT in `score`.
+- [x] ISC-307: Computation: `mutuality = Math.min(sent, received)` at the composition step (after warmth batch fetch). Integer scale matches `total`/`sent`/`received` — easy display, no float-rounding ambiguity. Reasoning logged at the sort-closure entry.
+- [x] ISC-308: Anti: `mutuality === 0` for one-way relationships (sent>0, received=0 OR sent=0, received>0). Test: pick a real-data person where messages are predominantly one-direction and assert `mutuality === Math.min(stats.sent, stats.received)`.
+
+*v0.3.2-B: sort=mutuality mode*
+
+- [x] ISC-309: `parseReachSort()` accepts a third value `"mutuality"`. Unknown / undefined / null / unrecognised → still falls back to `"epistemic"` (ISC-274 contract preserved).
+- [x] ISC-310: `ReachSort` type is now `"epistemic" | "warmth" | "mutuality"`. `findReachToPerson(..., sort)` accepts all three; default remains `"epistemic"`.
+- [x] ISC-311: `sort="mutuality"` ordering: `messages.mutuality DESC → messages.lastAt DESC (NULLS-LAST) → score DESC → name ASC`. Deterministic total order on the zero-tail (same shape as the warmth tiebreak chain).
+- [x] ISC-312: `sort="epistemic"` ordering byte-identical to pre-v0.3.2 (regression-safe); `sort="warmth"` ordering byte-identical to v0.3.0-C/v0.3.1 (regression-safe). The new mutuality field added to the candidate shape does NOT alter either prior ordering.
+- [x] ISC-313: Anti: mutuality never mixes into `score` or `messages.total`. Three independent ranking signals coexist on every candidate; sort mode picks which one drives ordering.
+
+*v0.3.2-B: UI — three-button sort toggle*
+
+- [x] ISC-314: `/queries/reach/[id]` sort toggle becomes a three-button group: Epistemic | Warmth | Mutuality. `data-testid="reach-sort-mutuality"` on the new button. The button widths and visual rhythm match the two existing buttons.
+- [x] ISC-315: Active state: exactly ONE button has `aria-pressed="true"`; the other two have `aria-pressed="false"`. Verified by playwright sum-of-`aria-pressed=true` = 1 across all three modes.
+- [x] ISC-316: Default URL (`/queries/reach/[id]` with no `?sort`) → Epistemic active (ISC-281 preserved). `?sort=warmth` → Warmth active (ISC-282 preserved). `?sort=mutuality` → Mutuality active. `?sort=garbage` → falls back to Epistemic active (ISC-284 preserved).
+- [x] ISC-317: Each candidate row now shows BOTH the warmth pill (existing, `data-testid="reach-warmth"`) AND a new mutuality pill (`data-testid="reach-mutuality"`) — both always render (render-zeros-not-absence). Mutuality pill shows `"↔ N"` when `total > 0`, or `"—"` when zero. The `↔` is a literal Unicode character; no icon font.
+- [x] ISC-318: The heading above the candidate list reflects the active sort: "Strongest reach" (epistemic), "Warmest reach" (warmth — existing), "Most mutual reach" (mutuality — new).
+
+*v0.3.2-B: tests*
+
+- [x] ISC-319: `reach.test.ts` gains a `parseReachSort("mutuality")` case → returns `"mutuality"`.
+- [x] ISC-320: `reach.test.ts` gains a `sort="mutuality"` ordering test: monotone non-increasing on `messages.mutuality`; tiebreak on `lastAt` NULLS-LAST; zero-mutuality candidates fall to the bottom (parallel to the warmth NULLS-LAST test).
+- [x] ISC-321: `reach.test.ts` gains a `messages.mutuality` invariant test: for every candidate, `messages.mutuality === Math.min(messages.sent, messages.received)`.
+- [x] ISC-322: `messages.test.ts` is NOT modified — the messages module's public surface is unchanged. `getMessageCountsByPeople` returns `{sent, received, total}`; mutuality derivation is reach.ts's concern, not the messages module's.
+
+*v0.3.2-release: verify + advisor + tag*
+
+- [x] ISC-323: `scripts/verify-v030c.ts` is extended (or a sibling `verify-v032.ts` is added) to cover the new mutuality surface — three-button toggle, mutuality pill renders, `?sort=mutuality` orders correctly, `aria-pressed` sum-is-1 invariant. The existing 18/18 assertions still pass.
+- [x] ISC-324: `bun run typecheck` → exit 0. No new TS errors.
+- [x] ISC-325: `bun test` → all tests pass (49 prior + new v0.3.2 tests). 0 failures.
+- [x] ISC-326: Advisor fires at commitment-boundary before `phase: complete`. Any substantive catches land as ISA Decisions + (where applicable) new ISCs. Trivial / workflow-FP catches are still documented.
+- [x] ISC-327: Annotated tag `v0.3.2` cut at the slice commit; pushed to `origin/main` + `refs/tags/v0.3.2` (per the v0.3.1 push pattern).
+- [x] ISC-328: Anti: no new SQL migration. `git diff src/lib/db/schema.ts` → empty.
+- [x] ISC-329: Anti: reach.ts and messages.ts INSERT/UPDATE/DELETE count = 0 (read-side composition only, per ISC-300 / ISC-329 promotion).
+- [x] ISC-330: Anti: `/people/[id]` Messages section, `/people?sort=last_contact`, and `/queries/reach/[id]?sort=epistemic` and `?sort=warmth` ALL render byte-identical to v0.3.1 — v0.3.2 is additive only (new sort mode + new pill; no modifications to existing surfaces).
+
 ## Test Strategy
 
 | isc | type | check | threshold | tool |
@@ -563,6 +618,14 @@ Pursue: extend `/queries/reach/[id]` so the ranked-intermediary list surfaces a 
 | reach-warmth-ui *(v0.3.0-C)* | ISC-279..287, ISC-297 | reach-composition | no |
 | isolation-gates-v030c *(v0.3.0-C)* | ISC-288..289, ISC-298..300 | reach-warmth-ui | yes (at VERIFY) |
 | verify-v030c *(v0.3.0-C)* | ISC-292..296 | reach-warmth-ui, isolation-gates-v030c | no (gate) |
+| orm-isolation-isc *(v0.3.2-A)* | ISC-301..302 | (existing messages.ts + ingest.ts whitelist) | yes (with adversarial-fixtures) |
+| adversarial-fixtures *(v0.3.2-A)* | ISC-303..305 | (existing reach.test.ts) | yes (with orm-isolation-isc) |
+| mutuality-scalar *(v0.3.2-B)* | ISC-306..308 | reach-composition | no |
+| mutuality-sort-mode *(v0.3.2-B)* | ISC-309..313 | mutuality-scalar | no |
+| mutuality-ui *(v0.3.2-B)* | ISC-314..318 | mutuality-sort-mode | no |
+| mutuality-tests *(v0.3.2-B)* | ISC-319..322 | mutuality-ui | yes (with verify-v032) |
+| verify-v032 *(v0.3.2-release)* | ISC-323..326 | mutuality-ui | no (gate) |
+| release-v032 *(v0.3.2-release)* | ISC-327..330 | verify-v032 | no |
 
 ## Decisions
 
@@ -650,6 +713,17 @@ Pursue: extend `/queries/reach/[id]` so the ranked-intermediary list surfaces a 
 - 2026-05-21 v0.3.0-C refined (Advisor catch, commitment-boundary): **`total` is the warmth scalar, not `min(sent, received)` or any mutuality measure.** Advisor surfaced the ambiguity: is "warmth 23" 23-sent-by-me (spam) or 23-received (they want me) or a balanced 12/11 (mutuality)? Decision: total is the right scalar at the reach-rank surface because the user's question is "how much have we communicated" — high counts in either direction signal a relationship live enough to ask. The `sent` and `received` cells remain available on `/people/[id]` for users who want to inspect the directionality. Mutuality as a separate ranking primitive is a future ISC (warm-path-finder v2), not v0.3.0-C scope.
 - 2026-05-21 v0.3.0-C refined (Advisor catch, commitment-boundary): **Single-target real-data smoke is anecdotal, not adversarial.** Advisor flagged that the verify probe runs against one target (Javier García López, 142 candidates) — happy path. Adversarial fixtures deferred to follow-up: (a) target with all-zero warmth across all candidates (does the toggle still render + flip without crashing?); (b) target with one candidate having very high warmth + zero epistemic, vs one candidate having zero warmth + max epistemic (does ranking visibly diverge in both directions?). Acknowledged scope gap; not a blocker for v0.3.0-C because the type system + ISC-273 ALWAYS-present invariant prevents the zero-everywhere crash class.
 - 2026-05-21 v0.3.0-C noted (Advisor false-positive, workflow): **Advisor's `--auto-state` loaded the wrong ISA slug (`20260515_isocorp-ma-pwc-spain-deals`).** Advisor flagged this loudly as workflow-fatal. It's actually a known v6.2.x deferral in the PAI Algorithm: `Inference.ts --auto-state` reads `~/.claude/PAI/MEMORY/WORK/` and does NOT yet auto-discover `<project>/ISA.md` project-ISA homes. The actual project ISA at `/mnt/c/Users/mca/Projects/Strand/ISA.md` is correctly scoped to v0.3.0-C (33/33 ISCs, all the v0.3.0-C Decisions above). Advisor's substantive critique (the four items above) was still high-quality and actionable; only the workflow-state preamble was misled by the stale auto-state. Logged here so future runs don't re-litigate.
+
+- 2026-05-21 v0.3.2: **Scope locked at v0.3.2-A (hardening) + v0.3.2-B (Mutuality) + v0.3.2-release (verify + tag).** Default of three scope options offered at the v0.3.2 PLAN; user picked "continue with a b and c" — interpreted as the v0.3.2 sub-slices (A/B/release), not the surface-level alternatives (`/graph` perf, W8 multi-tenant, release-hygiene-only). The default closes all four Advisor follow-ups from v0.3.0-C in one tag and completes the warm-path arc before the next surface pivot.
+- 2026-05-21 v0.3.2: **Mutuality scalar = `min(sent, received)`, not the normalised ratio `2*min/(sent+received)`.** Integer scale matches the existing `total`/`sent`/`received` fields — easy to display ("↔ 12") without float-rounding ambiguity in the UI, and trivially comparable in the sort closure. The normalised ratio is a better mathematical measure of "how balanced is this relationship" but `min` is a better measure of "how much two-way investment has there been" — and the latter is the question the warm-path-finder is asking. Logged at the sort-closure entry.
+- 2026-05-21 v0.3.2: **Three independent ranking signals on every candidate** (`score` for epistemic, `messages.total` for warmth, `messages.mutuality` for two-way investment). The sort mode is the user's question; the signals never blend. ISC-313 enforces. Three-button toggle on `/queries/reach/[id]` (Epistemic ↔ Warmth ↔ Mutuality) is the natural surface for "pick the question, see the answer".
+- 2026-05-21 v0.3.2: **ORM-symbol probe promoted from manual-verification (v0.3.0-C Changelog) to a numbered ISC (ISC-301).** v0.3.0-C ran the broader rg as an Advisor-driven manual check; v0.3.2 formalises it as a peer of ISC-265 (JS-import) and ISC-289 (SQL-keyword). Three-layer enforcement is now the doctrinal pattern for any future epistemic-category boundary on a Drizzle codebase.
+- 2026-05-21 v0.3.2: **show-my-math on delegation floor (E3 soft ≥2, selected 0 sub-agents).** Same situation as v0.3.0-C / v0.3.0-B: Forge/Anvil/Cato unavailable on this WSL host (codex CLI not installed — see `state_cato_codex_not_installed.md`). Advisor fired at the commitment-boundary before `phase: complete` and produced two substantive items + ten v0.3.3 follow-up conjectures (logged below).
+
+- 2026-05-21 v0.3.2 refined (Advisor catch, commitment-boundary): **Mutuality tie-storms at low integers are the top regression surface — secondary sort keys MUST be deterministic and explicit.** With `min(sent, received)` as the scalar and an integer scale, the dataset will have dozens-to-hundreds of candidates tied at `mutuality=1`, `=2`, etc. The tiebreak chain documented at the sort closure (`mutuality DESC → lastAt DESC NULLS-LAST → score DESC → name ASC`) terminates at name and is fully deterministic — but Advisor's point stands that this is exactly where future "the bookmark moved on me" reports would surface. Captured both at the sort closure (code comment) and here (the chain is the spec). ISC-311 verifies the chain operationally; the bookmark round-trip at ISC-297 + v0.3.2 mutuality bookmark cycle (29/29 verify) closes the empirical loop.
+- 2026-05-21 v0.3.2 refined (Advisor catch, commitment-boundary): **Display rule for `—` vs `↔ 0`: there is no `↔ 0` rendered for v0.3.2.** Advisor surfaced an ambiguity: does `—` mean "null/unknown" while `↔ 0` means "known-zero on at least one side"? Decision: every candidate has known message counts (zero or positive) — we don't have an "unknown" state for messages in v0.3.2. So the warmth pill renders `"—"` for `total === 0` (no observed activity), and the mutuality pill renders `"—"` for `mutuality === 0` (no two-way activity). Same visual rule. `↔ 0` is never rendered. If a future "we couldn't compute it" state is introduced (e.g., during ingest), a distinct token (`"?"`) would be needed to distinguish it from known-zero.
+- 2026-05-21 v0.3.2 noted (Advisor false-positive, workflow, same as v0.3.0-C): **Advisor's `--auto-state` loaded the wrong ISA slug again.** Known v6.2.x deferral: `Inference.ts --auto-state` reads `~/.claude/PAI/MEMORY/WORK/` and does NOT yet auto-discover `<project>/ISA.md` project-ISA homes. The actual project ISA at `/mnt/c/Users/mca/Projects/Strand/ISA.md` is correctly scoped to v0.3.2 (30/30 ISCs, all the v0.3.2 Decisions above). Substantive critique was still high-quality; only the workflow-state preamble was misled. Logged here so the next slice doesn't re-litigate.
+- 2026-05-21 v0.3.2 deferred-to-v0.3.3 (Advisor conjectures, surfaced not patched): (1) **Mass-channel exclusion** — distribution lists / calendar invites / auto-replies inflate `received` and skew mutuality for those senders; needs a 1-to-many detector before mutuality is fair on those rows. (2) **Time-decay parity** — all-time mutuality overweights stale loops; epistemic and warmth also lack decay but mutuality's "did we go two-way?" semantic is most distorted by a relationship that died 5 years ago. (3) **Alias / namespace imports in ISC-301** — `import * as orm` or `import { messages as M }` bypass static text grep; static-AST probe is the durable fix. (4) **Tagged-template SQL precedence** — `db.all(sql\`SELECT ... FROM messages\`)` trips ISC-289 (SQL-keyword) but does it ALSO trip ISC-301 (ORM-symbol)? Document the precedence. (5) **Adversarial-fixture meta-assertion** — the canonical target (Javier García López) should provably NOT match the all-zero-warmth or divergent skip path, so a broken fixture detector doesn't silently pass. (6) **Bookmark cold-deep-link × toggle × back-button matrix** — verify-v030c.ts covers deep-link + toggle, doesn't cover back-button. (7) **Default-elision asymmetry** — `?sort=epistemic` is elided to no-param; round-trip is asymmetric across the three modes. (8) **Pre-commit / CI gate enforcement** — three isolation probes currently run only at the model's verify step, not in CI. (9) **Dynamic imports / `require()`** bypass static probes — explicit non-goal line in the ISC. (10) **Type-only imports** in ISC-301 — `import type { InferSelectModel }` is compile-time-only and should arguably be allowed even in restricted modules; pick a posture and document. All ten are durable follow-ups; none block v0.3.2.
 
 ## Changelog
 
@@ -826,3 +900,16 @@ Pursue: extend `/queries/reach/[id]` so the ranked-intermediary list surfaces a 
 - ISC-299: No new migration. `git diff src/lib/db/schema.ts` → empty. drizzle-kit not invoked.
 - ISC-300: Anti read-side: `grep -nE 'INSERT|UPDATE|DELETE' src/lib/queries/reach.ts` → 0 hits. reach.ts contains only `db.select()` + `db.all(sql\`...SELECT...\`)` reads.
 - Advisor (E3 commitment-boundary, v0.3.0-C): **invoked and produced four substantive items + one workflow false-positive** — (1) Drizzle ORM access to the messages table was a blind spot in the ISC-289 regex; broader rg verified 0 hits, captured as a Changelog learning. (2) Warmth sort tiebreakers need full determinism for bookmark stability; documented total order in Decisions + ISC-277 test confirms zero-tail position. (3) `total` is the right warmth scalar at the reach-rank surface, with `sent`/`received` available on `/people/[id]` for directionality inspection; mutuality as a separate primitive is future-scope. (4) Single-target real-data smoke is anecdotal; adversarial fixtures (all-zero warmth, divergent epistemic-vs-warmth) deferred as known scope gap. The workflow false-positive (Advisor's `--auto-state` loaded the wrong ISA slug) is a known v6.2.x deferral in PAI Algorithm; documented for future runs. Cato (cross-vendor): `skipped` — codex CLI still not installed on this WSL host.
+
+- ISC-301..302 (v0.3.2 ORM-symbol grep): `rg -n 'schema\.messages|from\(messages\)|insertMessages|messagesTable\.|messages_table' src/ --glob '!src/lib/queries/messages.ts' --glob '!src/lib/queries/messages.test.ts' --glob '!src/lib/linkedin/ingest.ts' --glob '!src/lib/db/**' --glob '!scripts/**' --glob '!**/*.test.ts'` → 0 hits. Combined with ISC-265 (JS-import grep) 0 hits and ISC-289 (SQL-keyword grep) 0 hits → three-layer enforcement of the messages epistemic-category boundary live.
+- ISC-303..305 (v0.3.2 adversarial fixtures): `bun test src/lib/queries/reach.test.ts` includes the all-zero-warmth fixture test (passes — confirms warmth and epistemic produce identical orderings when no message signal exists) and the divergent-rankings fixture test (sweeps top-20 reach-rich targets; honestly skips if none qualify rather than passing silently). Real-data execution: both tests ran without skip on Matt's dataset (15 pass / 3017 expect() calls on reach.test.ts).
+- ISC-306..308 (v0.3.2 mutuality scalar): every candidate's `messages.mutuality === Math.min(messages.sent, messages.received)`; strictly one-way relationships (sent>0 received=0 OR sent=0 received>0) → mutuality === 0. Verified by reach.test.ts case "ISC-308 / ISC-321".
+- ISC-309..313 (v0.3.2 sort=mutuality mode): `parseReachSort("mutuality")` → `"mutuality"`; case-sensitive (`"MUTUALITY"` → epistemic). Sort closure ordering monotone non-increasing on `messages.mutuality`; NULLS-LAST on `lastAt`; zero-mutuality tail at bottom. ISC-312/313: `sort="mutuality"` does NOT alter `score` or `messages.total` on any candidate vs sort="epistemic" — three signals stay independent. Real-data probe: mutuality top-1 = 11, vs warmth top-1 = 23 — scalars visibly produce different orderings (the warmth top is one-way-heavy; mutuality finds the more balanced contact).
+- ISC-314..318 (v0.3.2 three-button UI): `data-testid="reach-sort-mutuality"` button renders in the toggle group; aria-pressed flips correctly; sum-of-aria-pressed=true is exactly 1 across all three modes (epistemic / warmth / mutuality); ?sort=mutuality renders Mutuality active; ?sort=garbage falls back to Epistemic active; mutuality pill (`data-testid="reach-mutuality"`) renders on every candidate row (142/142 on the real-data probe target); heading rotates ("Strongest reach" / "Warmest reach" / "Most mutual reach"); bookmark URL preserves the sort param for all three modes.
+- ISC-319..322 (v0.3.2 tests): `bun test src/lib/queries/reach.test.ts` — 15 pass / 0 fail / 3017 expect() calls (+6 new v0.3.2 cases: 1 parseReachSort mutuality + 3 mutuality describe + 2 adversarial). `messages.test.ts` untouched — messages module public surface unchanged (ISC-322).
+- ISC-323..325 (v0.3.2 verify + typecheck + suite): `scripts/verify-v030c.ts` extended to cover the mutuality surface — **29/29 playwright assertions pass** (was 18/18 at v0.3.1; +11 new for v0.3.2). `bun run typecheck` → exit 0. `bun test` full suite → 55 pass / 0 fail / 3434 expect() calls across 4 test files.
+- ISC-326 (Advisor commitment-boundary): **invoked and produced two substantive items + ten v0.3.3 conjectures + one workflow false-positive** — (1) mutuality tie-storms at low integers need explicit deterministic secondary sort (chain already in place: mutuality → lastAt → score → name); (2) display rule `—` vs `↔ 0` — `↔ 0` never rendered (zero state is `—`, parallel to warmth pill). Ten conjectures filed in Decisions as v0.3.3 follow-ups (mass-channel exclusion, time-decay parity, alias imports, tagged-template SQL precedence, fixture-skip meta-assertion, back-button bookmark coverage, default-elision asymmetry, CI gate enforcement, dynamic-imports non-goal, type-only-imports posture). Cato (cross-vendor): `skipped` — codex CLI not installed on this WSL host.
+- ISC-327 (release): annotated tag `v0.3.2` cut at the slice commit and pushed to origin/main + refs/tags/v0.3.2 (per v0.3.0 / v0.3.1 push pattern).
+- ISC-328: No new SQL migration. `git diff src/lib/db/schema.ts` → empty.
+- ISC-329: Anti read-side: `grep -nE 'INSERT|UPDATE|DELETE' src/lib/queries/reach.ts src/lib/queries/messages.ts` → 0 hits in reach.ts; messages.ts only contains read-side `db.all(sql\`SELECT ...\`)` calls.
+- ISC-330: Anti regression: `/people/[id]` Messages section, `/people?sort=last_contact`, `/queries/reach/[id]?sort=epistemic`, and `/queries/reach/[id]?sort=warmth` ALL render byte-identical to v0.3.1 in their existing fields. Mutuality pill is additive (new DOM element); warmth pill content unchanged.

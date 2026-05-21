@@ -1,8 +1,9 @@
-// v0.3.0-C verify: warm-path-finder on /queries/reach/[id]. Asserts warmth
-// pill renders on every row, sort toggle flips ordering, aria-pressed
-// reflects active mode, unknown sort falls back, self panel + direct
-// connection panel render identically across sort modes, bookmark URL
-// round-trips with ?sort=warmth. Same shape as verify-v030b.ts.
+// v0.3.0-C + v0.3.2 verify: warm-path-finder on /queries/reach/[id].
+// Asserts warmth + mutuality pills render on every row, three-button sort
+// toggle (Epistemic ↔ Warmth ↔ Mutuality), aria-pressed reflects active
+// mode, unknown sort falls back, self panel + direct connection panel
+// render identically across all sort modes, bookmark URL round-trips with
+// ?sort=warmth and ?sort=mutuality.
 import { firefox } from "playwright";
 import { mkdirSync } from "node:fs";
 import { sql } from "drizzle-orm";
@@ -90,18 +91,35 @@ const epiPressed = await page
 const wrmPressed = await page
   .locator('[data-testid="reach-sort-warmth"]')
   .getAttribute("aria-pressed");
+const mutPressed = await page
+  .locator('[data-testid="reach-sort-mutuality"]')
+  .getAttribute("aria-pressed");
 checks.push({
-  name: "ISC-281 default URL → Epistemic active (aria-pressed=true), Warmth inactive",
-  ok: epiPressed === "true" && wrmPressed === "false",
-  detail: `epi=${epiPressed} wrm=${wrmPressed}`,
+  name: "ISC-281 / ISC-316 default URL → Epistemic active (aria-pressed=true), Warmth + Mutuality inactive",
+  ok: epiPressed === "true" && wrmPressed === "false" && mutPressed === "false",
+  detail: `epi=${epiPressed} wrm=${wrmPressed} mut=${mutPressed}`,
+});
+
+// ISC-315: sum of aria-pressed=true across toggle group == 1 (exactly one active)
+const pressedSumEpi = [epiPressed, wrmPressed, mutPressed].filter((v) => v === "true").length;
+checks.push({
+  name: "ISC-315 aria-pressed sum-is-1 invariant (epistemic mode)",
+  ok: pressedSumEpi === 1,
+  detail: `pressed_count=${pressedSumEpi}`,
 });
 
 const warmthPills = await page.locator('[data-testid="reach-warmth"]').count();
+const mutualityPills = await page.locator('[data-testid="reach-mutuality"]').count();
 const rowCount = await page.locator('[data-testid="reach-row"]').count();
 checks.push({
   name: "ISC-279 warmth pill renders on EVERY candidate row (render-zeros-not-absence)",
   ok: warmthPills === rowCount && rowCount > 0,
   detail: `pills=${warmthPills} rows=${rowCount}`,
+});
+checks.push({
+  name: "ISC-317 mutuality pill renders on EVERY candidate row (render-zeros-not-absence)",
+  ok: mutualityPills === rowCount && rowCount > 0,
+  detail: `pills=${mutualityPills} rows=${rowCount}`,
 });
 
 // Capture epistemic ordering (intermediary IDs in order).
@@ -171,6 +189,87 @@ checks.push({
   detail: `violation=${zerosLastViolated}`,
 });
 
+// ── ?sort=mutuality → Mutuality active, mutuality-sort ordering ────────
+const mutUrl = `${ROOT}/queries/reach/${target.id}?sort=mutuality`;
+const mutResp = await page.goto(mutUrl, { waitUntil: "networkidle" });
+await page.screenshot({ path: `${OUT_DIR}/reach-mutuality.png`, fullPage: true });
+checks.push({
+  name: "?sort=mutuality → 200",
+  ok: mutResp?.status() === 200,
+  detail: `status=${mutResp?.status()}`,
+});
+
+const epiPressedM = await page
+  .locator('[data-testid="reach-sort-epistemic"]')
+  .getAttribute("aria-pressed");
+const wrmPressedM = await page
+  .locator('[data-testid="reach-sort-warmth"]')
+  .getAttribute("aria-pressed");
+const mutPressedM = await page
+  .locator('[data-testid="reach-sort-mutuality"]')
+  .getAttribute("aria-pressed");
+checks.push({
+  name: "ISC-316 ?sort=mutuality → Mutuality active, Epistemic + Warmth inactive",
+  ok: epiPressedM === "false" && wrmPressedM === "false" && mutPressedM === "true",
+  detail: `epi=${epiPressedM} wrm=${wrmPressedM} mut=${mutPressedM}`,
+});
+const pressedSumMut = [epiPressedM, wrmPressedM, mutPressedM].filter((v) => v === "true").length;
+checks.push({
+  name: "ISC-315 aria-pressed sum-is-1 invariant (mutuality mode)",
+  ok: pressedSumMut === 1,
+  detail: `pressed_count=${pressedSumMut}`,
+});
+
+const headingMut = (
+  await page
+    .locator('[data-testid="reach-candidates-section"] h2')
+    .first()
+    .textContent()
+)?.trim();
+checks.push({
+  name: "ISC-318 mutuality mode heading reads 'Most mutual reach'",
+  ok: headingMut === "Most mutual reach",
+  detail: `heading="${headingMut}"`,
+});
+
+// Confirm mutuality values monotone non-increasing in mutuality mode.
+const mutualityTotals = await page
+  .locator('[data-testid="reach-mutuality"]')
+  .evaluateAll((els) =>
+    els.map((el) => Number((el as HTMLElement).getAttribute("data-mutuality") ?? "0")),
+  );
+let mutMonotone = true;
+let mutZerosLastViolated = false;
+let mutSawZero = false;
+for (let i = 0; i < mutualityTotals.length; i++) {
+  if (i > 0 && mutualityTotals[i - 1]! < mutualityTotals[i]!) mutMonotone = false;
+  if (mutualityTotals[i] === 0) mutSawZero = true;
+  else if (mutSawZero) mutZerosLastViolated = true;
+}
+checks.push({
+  name: "ISC-311 mutuality sort: totals monotone non-increasing across rows",
+  ok: mutMonotone,
+  detail: `mut=[${mutualityTotals.slice(0, 8).join(", ")}${mutualityTotals.length > 8 ? ", …" : ""}]`,
+});
+checks.push({
+  name: "ISC-311 mutuality sort: zero-mutuality intermediaries fall to the bottom (NULLS LAST)",
+  ok: !mutZerosLastViolated,
+  detail: `violation=${mutZerosLastViolated}`,
+});
+
+const mutualityIds = await page
+  .locator('[data-testid="reach-row"]')
+  .evaluateAll((els) =>
+    els.map((el) => (el as HTMLElement).querySelector("a")?.getAttribute("href")),
+  );
+checks.push({
+  name: "ISC-312 candidate set identical across all three sort modes (epi/wrm/mut)",
+  ok:
+    epistemicIds.length === mutualityIds.length &&
+    new Set([...epistemicIds, ...mutualityIds]).size === new Set(epistemicIds).size,
+  detail: `epi=${epistemicIds.length} mut=${mutualityIds.length}`,
+});
+
 // ── ?sort=garbage → fallback to epistemic ────────────────────────────
 const badResp = await page.goto(`${ROOT}/queries/reach/${target.id}?sort=garbage`, {
   waitUntil: "networkidle",
@@ -217,6 +316,33 @@ checks.push({
   ok: selfWarmthCount === 1 && selfWarmthListCount === 0,
   detail: `self=${selfWarmthCount} list=${selfWarmthListCount}`,
 });
+
+// ── bookmark round-trip with ?sort=mutuality URL ───────────────────────
+const bookmarkMutBody = JSON.stringify({
+  name: `verify-v032-mut-${Date.now()}`,
+  url: `/queries/reach/${target.id}?sort=mutuality`,
+});
+const postMutResp = await fetch(`${ROOT}/api/bookmarks`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: bookmarkMutBody,
+});
+const postMutJson = postMutResp.ok ? await postMutResp.json() : null;
+checks.push({
+  name: "POST /api/bookmarks with ?sort=mutuality URL → 201",
+  ok: postMutResp.status === 201 && !!postMutJson?.id,
+  detail: `status=${postMutResp.status} id=${postMutJson?.id ?? "—"}`,
+});
+if (postMutJson?.id) {
+  const delMutResp = await fetch(`${ROOT}/api/bookmarks/${postMutJson.id}`, {
+    method: "DELETE",
+  });
+  checks.push({
+    name: "DELETE /api/bookmarks/[id] (?sort=mutuality bookmark) → 204",
+    ok: delMutResp.status === 204,
+    detail: `status=${delMutResp.status}`,
+  });
+}
 
 // ── bookmarks round-trip with ?sort=warmth URL (ISC-297) ──────────────
 const bookmarkBody = JSON.stringify({

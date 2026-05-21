@@ -18,7 +18,13 @@ import {
 // Composed onto every candidate ALWAYS (zero-when-none); never blended into
 // `score`. The `sort` param is the user's question: "rank by epistemic
 // strength (default)" vs "rank by relationship warmth".
-export type ReachSort = "epistemic" | "warmth";
+//
+// v0.3.2: third sort mode `mutuality` — mutuality = min(sent, received).
+// Picks two-way relationships. Same epistemic-category as warmth (observed
+// messages), but a different scalar — answers "do they lean in toward each
+// other" rather than "how much have we communicated". Still never mixed into
+// `score`; still never persisted (computed at composition time).
+export type ReachSort = "epistemic" | "warmth" | "mutuality";
 
 export type ReachCandidate = {
   intermediaryId: string;
@@ -28,11 +34,15 @@ export type ReachCandidate = {
   score: number;
   // v0.3.0-C: warmth signal. ALWAYS present on every candidate (render-zeros-
   // not-absence — see feedback_render_zeros_not_absence.md). Zero-message
-  // intermediaries get {sent:0, received:0, total:0, lastAt:null}.
+  // intermediaries get {sent:0, received:0, total:0, mutuality:0, lastAt:null}.
+  // v0.3.2: mutuality = min(sent, received). Two-way investment, integer
+  // scale matching sent/received/total. Computed in this module's composition
+  // step (never persisted; never sourced from a query helper).
   messages: {
     sent: number;
     received: number;
     total: number;
+    mutuality: number;
     lastAt: Date | null;
   };
   // For manual edges: the user's note (may be null).
@@ -65,9 +75,12 @@ export type ReachResult = {
 
 // v0.3.0-C: sort param is forgiving — unknown / undefined / null falls back
 // to "epistemic" (matches ISC-257 unknown-sort safety from v0.3.0-B).
+// v0.3.2: "mutuality" is now also accepted.
 export function parseReachSort(raw: string | string[] | undefined): ReachSort {
   const v = Array.isArray(raw) ? raw[0] : raw;
-  return v === "warmth" ? "warmth" : "epistemic";
+  if (v === "warmth") return "warmth";
+  if (v === "mutuality") return "mutuality";
+  return "epistemic";
 }
 
 export async function findReachToPerson(
@@ -189,7 +202,7 @@ export async function findReachToPerson(
       intermediaryHeadline: m.other_headline,
       via: "manual",
       score: 1.0,
-      messages: { sent: 0, received: 0, total: 0, lastAt: null },
+      messages: { sent: 0, received: 0, total: 0, mutuality: 0, lastAt: null },
       note: m.note,
     });
   }
@@ -205,7 +218,7 @@ export async function findReachToPerson(
         intermediaryHeadline: d.other_headline,
         via: "derived",
         score: d.confidence,
-        messages: { sent: 0, received: 0, total: 0, lastAt: null },
+        messages: { sent: 0, received: 0, total: 0, mutuality: 0, lastAt: null },
         companyId: d.company_id,
         companyName: d.company_name,
         overlapMonths: months,
@@ -231,10 +244,17 @@ export async function findReachToPerson(
       const c = counts.get(id);
       const lastAt = lastContacts.get(id) ?? null;
       if (c || lastAt) {
+        const sent = c?.sent ?? 0;
+        const received = c?.received ?? 0;
         cand.messages = {
-          sent: c?.sent ?? 0,
-          received: c?.received ?? 0,
+          sent,
+          received,
           total: c?.total ?? 0,
+          // v0.3.2: mutuality = min(sent, received). Integer scale matches
+          // the other count fields. Zero iff either direction is zero —
+          // a strictly one-way correspondent has zero mutuality even if
+          // total is high (correct: one-way is not a relationship).
+          mutuality: Math.min(sent, received),
           lastAt,
         };
       }
@@ -249,6 +269,20 @@ export async function findReachToPerson(
     if (sort === "warmth") {
       if (b.messages.total !== a.messages.total) {
         return b.messages.total - a.messages.total;
+      }
+      const aLast = a.messages.lastAt?.getTime() ?? -Infinity;
+      const bLast = b.messages.lastAt?.getTime() ?? -Infinity;
+      if (bLast !== aLast) return bLast - aLast;
+      if (b.score !== a.score) return b.score - a.score;
+      return a.intermediaryName.localeCompare(b.intermediaryName);
+    }
+    // v0.3.2: ISC-311 — mutuality ordering by messages.mutuality DESC
+    // (min(sent,received)), tiebreak chain matches warmth — lastAt DESC
+    // NULLS-LAST → score DESC → name ASC. ISC-313 — mutuality NEVER
+    // mixes into score or messages.total; three independent signals.
+    if (sort === "mutuality") {
+      if (b.messages.mutuality !== a.messages.mutuality) {
+        return b.messages.mutuality - a.messages.mutuality;
       }
       const aLast = a.messages.lastAt?.getTime() ?? -Infinity;
       const bLast = b.messages.lastAt?.getTime() ?? -Infinity;
