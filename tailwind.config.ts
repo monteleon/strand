@@ -36,6 +36,17 @@ const config: Config = {
         "cubic-out": "var(--motion-ease-out)",
         "cubic-inout": "var(--motion-ease-inout)",
       },
+      keyframes: {
+        "hero-drift": {
+          "0%, 100%": { transform: "translate3d(0, 0, 0) scale(1)" },
+          "25%":      { transform: "translate3d(12px, -8px, 0) scale(1.02)" },
+          "50%":      { transform: "translate3d(-10px, 10px, 0) scale(1)" },
+          "75%":      { transform: "translate3d(6px, -4px, 0) scale(1.03)" },
+        },
+      },
+      animation: {
+        "hero-drift": "hero-drift 60s ease-in-out infinite",
+      },
     },
   },
   plugins: [],
