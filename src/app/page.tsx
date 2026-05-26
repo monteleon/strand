@@ -1,10 +1,16 @@
+import nextDynamic from "next/dynamic";
 import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { assembleNetworkGraph } from "@/lib/queries/graph";
-import { HeroGraph } from "@/components/hero-graph";
 
 export const dynamic = "force-dynamic";
+
+// Hero graph touches `document`, ssr disabled.
+const HeroGraph = nextDynamic(
+  () => import("@/components/hero-graph").then((m) => m.HeroGraph),
+  { ssr: false, loading: () => null },
+);
 
 async function getCounts() {
   const peopleCount = await db.$count(
