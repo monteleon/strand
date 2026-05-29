@@ -167,12 +167,21 @@ export type AtCompanyRow = {
   connectedAt: string | null;
 };
 
+export type AtCompanyPage = {
+  rows: AtCompanyRow[];
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+};
+
 export async function listAtCompany(
   companyId: string,
   status: AtCompanyStatus,
   sort: AtCompanySort,
+  page: number,
   tenantId: string = LOCAL_TENANT_ID,
-): Promise<AtCompanyRow[]> {
+): Promise<AtCompanyPage> {
   // Status WHERE clause is a parameterised sqlite int comparison.
   const statusSql =
     status === "current"
@@ -189,6 +198,23 @@ export async function listAtCompany(
       : sort === "connected"
         ? sql`ORDER BY (conn.connected_at IS NULL) ASC, conn.connected_at DESC, p.full_name ASC`
         : sql`ORDER BY CASE po.origin WHEN 'declared' THEN 0 ELSE 1 END, p.full_name ASC`;
+
+  // Count mirrors the row query's FROM/JOIN/WHERE exactly so the pagination
+  // math (totalPages, hasNext) lines up with what the LIMIT/OFFSET page slice
+  // actually returns — including the connections LEFT JOIN row shape.
+  const totalRow = await db.all<{ n: number }>(sql`
+    SELECT COUNT(*) AS n
+    FROM positions po
+    INNER JOIN people p ON p.id = po.person_id AND p.tenant_id = po.tenant_id
+    LEFT JOIN connections conn ON conn.tenant_id = po.tenant_id
+      AND conn.to_person_id = p.id
+    WHERE po.tenant_id = ${tenantId}
+      AND po.company_id = ${companyId}
+      ${statusSql}
+  `);
+  const total = Number(totalRow[0]?.n ?? 0);
+  const { offset, totalPages, hasNext, hasPrev } = pageWindow(page, total);
+
   const rows = await db.all<{
     id: string;
     full_name: string;
@@ -211,16 +237,23 @@ export async function listAtCompany(
       AND po.company_id = ${companyId}
       ${statusSql}
     ${orderSql}
+    LIMIT ${PAGE_SIZE} OFFSET ${offset}
   `);
-  return rows.map((r) => ({
-    id: r.id,
-    fullName: r.full_name,
-    headline: r.headline,
-    title: r.title,
-    startDate: r.start_date,
-    endDate: r.end_date,
-    current: r.current === 1,
-    origin: r.origin as "declared" | "synthesised",
-    connectedAt: r.connected_at,
-  }));
+  return {
+    rows: rows.map((r) => ({
+      id: r.id,
+      fullName: r.full_name,
+      headline: r.headline,
+      title: r.title,
+      startDate: r.start_date,
+      endDate: r.end_date,
+      current: r.current === 1,
+      origin: r.origin as "declared" | "synthesised",
+      connectedAt: r.connected_at,
+    })),
+    total,
+    totalPages,
+    hasNext,
+    hasPrev,
+  };
 }

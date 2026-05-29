@@ -1,13 +1,13 @@
 ---
 project: strand
-current_task: v0.4.0 — graph controls (cap dropdown + company picker + scope toggle)
-slug: v0.4.0-graph-controls
-effort: E3
+current_task: at-company pagination — audit finding (A), DOM-bloat fix
+slug: at-company-pagination
+effort: E2
 phase: complete
-progress: 34/34
+progress: 12/12
 mode: ALGORITHM
-started: 2026-05-21
-updated: 2026-05-21
+started: 2026-05-29
+updated: 2026-05-29
 ---
 
 # Strand — ISA
@@ -1059,3 +1059,29 @@ Pursue: `/graph` gains three new URL-bound filters in the existing panel — nod
 - 2026-05-21 v0.4.0 refined (Advisor catch, commitment-boundary): **Cap is a discrete control, not a freeform integer.** Original implementation accepted any int in [1, MAX_NODE_CAP=500] server-side but the dropdown snapped to discrete options — `?cap=37` rendered as 50 in the dropdown while the SQL fetched 37. Footgun on a release whose entire point is URL-bound filters. Adopted Advisor's "server-strict" stance: cap must be one of `CAP_DROPDOWN_VALUES`; non-snap → fall back to default. URL ⇔ UI now an exact round-trip; no silent snap-on-render. MAX_NODE_CAP retained as a constant but currently unreachable; would only matter if a future "custom cap" affordance landed.
 - 2026-05-21 v0.4.0 refined (Advisor catch, commitment-boundary): **LIKE-wildcard escape on the typeahead.** `searchCompanies("%")` would have matched everything via SQLite's `LIKE` wildcard semantic. Patched with explicit `ESCAPE '\\'` clause + escaping `% → \\%`, `_ → \\_`, `\\ → \\\\` in the trimmed query before substring-wrapping. Parameter binding alone doesn't protect against this — the wildcard interpretation happens INSIDE the LIKE operator.
 - 2026-05-21 v0.4.0: **Owner counts against cap (load-bearing).** Owner is added to selectedIds first (unconditionally), then candidates fill the remaining `cap - 1` slots. Cap=50 means 50 total visible nodes including owner. This composes correctly with company filter: `?company=X&cap=50` returns ≤50 total nodes at X (or X + owner-disconnected if owner isn't at X). Documented at the candidate selection loop + verified in ISC-386.
+
+### at-company pagination — audit finding (A) (2026-05-29)
+
+**Slice (ISC-420..431, E2):** `/queries/at-company` rendered every position row for a company (`listAtCompany` had no LIMIT; the page `.map()`'d the whole set) — DOM bloat on 1000+ employee companies. Fix adopts the repo's existing `pageWindow` + `PAGE_SIZE=50` pagination, identical to `listCompanies` / `listPeople`. No new SQL migration; read-side only.
+
+**Decisions:**
+- 2026-05-29: **Reuse, don't reinvent — `listAtCompany` returns the same paginated shape (`{rows,total,totalPages,hasNext,hasPrev}`) as `listCompanies`/`listPeople`.** The three list surfaces now share one pagination idiom. `page` added as a positional arg before `tenantId`; only caller is the at-company page.
+- 2026-05-29: **Count query mirrors the row query's FROM/JOIN/WHERE exactly** (incl. the `connections` LEFT JOIN), so `totalPages`/`hasNext` can't desync from the actual LIMIT/OFFSET slice if that join ever fans out. Tests assert against the returned `total`, never a hand-computed count.
+- 2026-05-29: **`PageNav` extended with an optional `extraParams` map (backward-compatible).** Existing callers (`/people`, `/companies`) pass nothing → byte-identical hrefs (verified live: `/people?page=2`, `/companies?page=2`). at-company passes `company` always + `status`/`sort` only when non-default, so the default view keeps a clean `?page=2&company=<id>` URL.
+- 2026-05-29: **Header shows the true `total`, not the page-slice length** (was `{rows.length}`). Per [[feedback_render_zeros_not_absence]] the count is the load-bearing claim surface; only the content list is conditional. FilterChips omit `page` → status/sort changes reset to page 1.
+- 2026-05-29: **Out-of-range `?page=` is not clamped** — mirrors `/people`/`/companies` (empty slice, real total, "No positions match this filter"). Consistency across the three surfaces chosen over a bespoke clamp; the UI never links past `totalPages`.
+- 2026-05-29: **Advisor SKIPPED (show-my-math).** Scope is one query + one shared component + one page; the risk surface (count/slice parity, backward-compat, default-elision) is fully covered by 8 unit tests against real data + a live curl probe across pages 1/2/3 + `/people` `/companies` regression probes. Cato N/A (E2, and codex CLI still absent on this WSL host — see [[state_cato_codex_not_installed]]).
+
+**Verification:**
+- ISC-420/424 (DOM-bloat fixed — core audit-A): live curl of PwC España (145 positions) → page 1 = **50** `data-origin` list items, page 2 = **50**, page 3 = **45**. No page renders the full 145. `page-nav` present on all three.
+- ISC-421: 8 unit tests (`src/lib/queries/companies.test.ts`) — page slices sum to exactly `total` across all pages; every page but the last is a full PAGE_SIZE page.
+- ISC-422: last-page remainder = `total - (totalPages-1)*PAGE_SIZE` (45 = 145 − 100).
+- ISC-423: `hasPrev=false`/`hasNext=true` on page 1; `hasNext=false`/`hasPrev=true` on the last page. Live: page 1 "← Previous" is a disabled span; page 3 "← Previous" is an active link, Next disabled. Indicator reads "Page 1 of 3" / "Page 3 of 3".
+- ISC-425: header renders "**145 positions from your network**" (true total) on page 1, not the slice length 50. `any.total === current.total + past.total` asserted.
+- ISC-426: declared-first ordering holds across the full page concatenation (no declared row after a synthesised row).
+- ISC-427: `?page=9999` → `rows=[]`, `total>0`, `hasNext=false`, `hasPrev=true`.
+- ISC-428: unknown company id → `{rows:[], total:0, totalPages:1, hasNext:false, hasPrev:false}`.
+- ISC-429 (Anti: no migration / read-side only): `git diff src/lib/db/schema.ts` empty; companies.ts contains only `db.all(sql\`SELECT…\`)` reads.
+- ISC-430: `bun run typecheck` exit 0; new test file 8 pass / 0 fail / 27 expect(); full `bun test` suite **94 pass / 0 fail / 3801 expect() across 7 files** (was 86 pass / 6 files at v0.4.1 — +8 tests, +1 file; 219s).
+- ISC-431 (Anti-regression): `/people` next-href = `/people?page=2`, `/companies` next-href = `/companies?page=2` — no `company`/`status` param leak from the `PageNav` extension; both still render 50 items + page-nav.
+- ISC release/tag: **DEFERRED** — work verified but not committed/tagged pending Matt's go-ahead (v0.4.2 was burned by the reverted hero attempt; next tag number is Matt's call).

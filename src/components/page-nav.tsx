@@ -9,6 +9,10 @@ type Props = {
   hasPrev: boolean;
   hasNext: boolean;
   sort?: string;
+  // Extra query params (e.g. company/status on /queries/at-company) carried
+  // across page navigation. Undefined/empty values are omitted so default
+  // filters keep the URL clean.
+  extraParams?: Record<string, string | undefined>;
 };
 
 function buildHref(
@@ -16,11 +20,17 @@ function buildHref(
   page: number,
   q: string,
   sort?: string,
+  extraParams?: Record<string, string | undefined>,
 ): string {
   const params = new URLSearchParams();
   if (page > 1) params.set("page", String(page));
   if (q) params.set("q", q);
   if (sort) params.set("sort", sort);
+  if (extraParams) {
+    for (const [k, v] of Object.entries(extraParams)) {
+      if (v) params.set(k, v);
+    }
+  }
   const qs = params.toString();
   return qs ? `${basePath}?${qs}` : basePath;
 }
@@ -33,6 +43,7 @@ export function PageNav({
   hasPrev,
   hasNext,
   sort,
+  extraParams,
 }: Props) {
   if (totalPages <= 1) return null;
   return (
@@ -42,7 +53,7 @@ export function PageNav({
     >
       <PageLink
         disabled={!hasPrev}
-        href={buildHref(basePath, page - 1, q, sort)}
+        href={buildHref(basePath, page - 1, q, sort, extraParams)}
         label="← Previous"
       />
       <span className="font-mono text-xs text-text-secondary">
@@ -51,7 +62,7 @@ export function PageNav({
       </span>
       <PageLink
         disabled={!hasNext}
-        href={buildHref(basePath, page + 1, q, sort)}
+        href={buildHref(basePath, page + 1, q, sort, extraParams)}
         label="Next →"
       />
     </nav>

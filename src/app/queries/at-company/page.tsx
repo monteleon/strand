@@ -8,8 +8,10 @@ import {
   type AtCompanyStatus,
 } from "@/lib/queries/companies";
 import { listSavedQueries } from "@/lib/queries/savedQueries";
+import { parsePageParams } from "@/lib/pagination";
 import { SaveBookmark } from "@/components/save-bookmark";
 import { SavedQueriesSidebar } from "@/components/saved-queries-sidebar";
+import { PageNav } from "@/components/page-nav";
 
 export const dynamic = "force-dynamic";
 
@@ -143,7 +145,13 @@ export default async function AtCompanyPage({
 
   const data = await getCompanyById(companyId);
   if (!data) notFound();
-  const rows = await listAtCompany(companyId, status, sort);
+  const page = parsePageParams(searchParams).page;
+  const { rows, total, totalPages, hasNext, hasPrev } = await listAtCompany(
+    companyId,
+    status,
+    sort,
+    page,
+  );
   const url = buildUrl({ company: companyId, status, sort });
 
   return (
@@ -165,8 +173,8 @@ export default async function AtCompanyPage({
             {data.company.name}
           </h1>
           <p className="mt-3 text-sm text-text-secondary">
-            <span className="font-mono text-text-primary">{rows.length}</span>{" "}
-            {rows.length === 1 ? "position" : "positions"} from your network
+            <span className="font-mono text-text-primary">{total}</span>{" "}
+            {total === 1 ? "position" : "positions"} from your network
             {status === "current" && " (currently active)"}
             {status === "past" && " (past)"}.
           </p>
@@ -268,6 +276,19 @@ export default async function AtCompanyPage({
               ))}
             </ul>
           )}
+          <PageNav
+            basePath="/queries/at-company"
+            page={page}
+            totalPages={totalPages}
+            q=""
+            hasPrev={hasPrev}
+            hasNext={hasNext}
+            extraParams={{
+              company: companyId,
+              status: status !== "any" ? status : undefined,
+              sort: sort !== "declared-first" ? sort : undefined,
+            }}
+          />
         </section>
 
         <section className="mt-6">
