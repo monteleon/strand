@@ -443,3 +443,121 @@ describe("writeOwner — rename re-ingest preserves owner id (v0.4.2)", () => {
     expect(result.connectionResolvesToOwner).toBe(true);
   });
 });
+
+describe("writePositions — endDate corrections land via UPSERT (v0.4.6, /code-review #2)", () => {
+  let result: {
+    afterFirstIngest: { count: number; endDate: string | null; current: boolean };
+    afterCorrectedEndDate: { count: number; endDate: string | null; current: boolean };
+    afterClearedEndDate: { count: number; endDate: string | null; current: boolean };
+    afterNoChange: { count: number; endDate: string | null; current: boolean };
+  };
+  let cleanup: () => void;
+
+  beforeAll(async () => {
+    const fresh = await freshDbWithMigrations();
+    cleanup = fresh.cleanup;
+    result = await runSubprocessScript(
+      fresh.dbPath,
+      `
+        const { db, schema, LOCAL_TENANT_ID } = await import("${REPO_ROOT}/src/lib/db/index.ts");
+        const { writeOwner, writePositions } = await import("${REPO_ROOT}/src/lib/linkedin/ingest.ts");
+        const { eq, and } = await import("drizzle-orm");
+        const now = new Date();
+        const tenantId = LOCAL_TENANT_ID;
+
+        await db.insert(schema.tenants).values({ id: tenantId, createdAt: now }).onConflictDoNothing();
+        await db.insert(schema.exportBatches).values({
+          id: "batch-1", tenantId, source: "linkedin", uploadedAt: now,
+          filename: "x.zip", sha256: "x".repeat(64),
+        });
+        await writeOwner(
+          { profile: { fullName: "Owner", headline: null } },
+          tenantId, "batch-1", now,
+        );
+        // Company id must match what writePositions will compute internally:
+        // sha1(tenantId|company|normalizedName). Otherwise the position FK fails.
+        const { createHash } = await import("node:crypto");
+        const ACME_ID = createHash("sha1").update(\`\${tenantId}|company|acme\`).digest("hex");
+        await db.insert(schema.companies).values({
+          id: ACME_ID, tenantId, name: "Acme", normalizedName: "acme",
+        });
+
+        // Stub ParsedExport — writePositions only touches parsed.positions.
+        const basePosition = {
+          companyName: "Acme",
+          title: "Engineer",
+          description: null,
+          location: null,
+          startDate: "2018-01-01",
+          endDate: "2024-01-01",
+          current: false,
+        };
+        const parsedWith = (overrides) => ({
+          profile: { fullName: "Owner", headline: null },
+          connections: [],
+          messages: [],
+          ownerProfileUrl: null,
+          messagesParseStats: { parsed: 0, expanded: 0, skipped_no_url: 0, skipped_no_date: 0 },
+          positions: [{ ...basePosition, ...overrides }],
+        });
+
+        const readPositions = async () => {
+          const rows = await db.select().from(schema.positions).where(eq(schema.positions.tenantId, tenantId));
+          return {
+            count: rows.length,
+            endDate: rows[0]?.endDate ?? null,
+            current: Boolean(rows[0]?.current),
+          };
+        };
+
+        // 1. First ingest — original endDate "2024-01-01", current=false.
+        await writePositions(parsedWith({}), tenantId);
+        const afterFirstIngest = await readPositions();
+
+        // 2. Re-ingest with the corrected endDate "2024-06-01" — the bug case.
+        //    Pre-fix: onConflictDoNothing dropped the correction silently.
+        //    Post-fix: UPSERT sets endDate to "2024-06-01".
+        await writePositions(parsedWith({ endDate: "2024-06-01" }), tenantId);
+        const afterCorrectedEndDate = await readPositions();
+
+        // 3. Re-ingest with endDate CLEARED (now current). UPSERT updates both
+        //    endDate=null AND current=true.
+        await writePositions(parsedWith({ endDate: null, current: true }), tenantId);
+        const afterClearedEndDate = await readPositions();
+
+        // 4. Re-ingest with no change — must remain ONE row (no duplication).
+        await writePositions(parsedWith({ endDate: null, current: true }), tenantId);
+        const afterNoChange = await readPositions();
+
+        console.log("${RESULT_MARKER}" + JSON.stringify({
+          afterFirstIngest, afterCorrectedEndDate, afterClearedEndDate, afterNoChange,
+        }));
+      `,
+    );
+  }, 60_000);
+
+  test("first ingest: 1 row, original endDate", () => {
+    expect(result.afterFirstIngest.count).toBe(1);
+    expect(result.afterFirstIngest.endDate).toBe("2024-01-01");
+    expect(result.afterFirstIngest.current).toBe(false);
+  });
+
+  test("corrected endDate re-ingest: 1 row (not 2), endDate updated", () => {
+    // Pre-fix: count would still be 1 but endDate stayed "2024-01-01" (silent drop)
+    expect(result.afterCorrectedEndDate.count).toBe(1);
+    expect(result.afterCorrectedEndDate.endDate).toBe("2024-06-01");
+    expect(result.afterCorrectedEndDate.current).toBe(false);
+  });
+
+  test("cleared endDate re-ingest (now current): endDate null AND current=true", () => {
+    expect(result.afterClearedEndDate.count).toBe(1);
+    expect(result.afterClearedEndDate.endDate).toBeNull();
+    expect(result.afterClearedEndDate.current).toBe(true);
+  });
+
+  test("idempotent re-ingest: same values stay one row, same values", () => {
+    expect(result.afterNoChange.count).toBe(1);
+    expect(result.afterNoChange.endDate).toBeNull();
+    expect(result.afterNoChange.current).toBe(true);
+  });
+});

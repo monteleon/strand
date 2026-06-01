@@ -278,7 +278,18 @@ async function writeConnections(parsed: ParsedExport, tenantId: string, now: Dat
   }
 }
 
-async function writePositions(parsed: ParsedExport, tenantId: string) {
+// v0.4.6 (/code-review finding #2): positionIdFromParts hashes (personId,
+// companyId, startDate, title) — endDate is deliberately excluded so a
+// position's identity is stable across re-ingests when the owner extends or
+// shortens a role on LinkedIn. With the prior `onConflictDoNothing()` that
+// stability meant the SECOND ingest of a corrected endDate was silently
+// dropped — the user would never see their correction land. Switch to UPSERT
+// on the mutable post-identity fields (endDate + current — `current` is
+// derived from endDate at parse time). startDate/title/companyId changes
+// still produce a new row with a new id; that's the right behaviour because
+// those changes amount to "a different position." Re-ingesting the most
+// recent export is now a one-shot repair for any user previously affected.
+export async function writePositions(parsed: ParsedExport, tenantId: string) {
   const tenantRow = await db
     .select()
     .from(schema.tenants)
@@ -304,7 +315,13 @@ async function writePositions(parsed: ParsedExport, tenantId: string) {
         current: p.current,
         origin: "declared",
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: schema.positions.id,
+        set: {
+          endDate: p.endDate,
+          current: p.current,
+        },
+      });
   }
 }
 
