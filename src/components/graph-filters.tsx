@@ -116,6 +116,25 @@ function parseScopeParam(raw: string | null): GraphScope | null {
   return null;
 }
 
+// v0.4.5: `?company=` (explicit empty) means CLEAR the filter — the user
+// went to the trouble of putting the param in the URL with no value, so
+// honour that. `/graph` with no `company` param at all is a different
+// shape: "use whatever the SSR initial was." Conflating them (the old
+// `searchParams.get("company")?.trim() || null ?? initialCompanyId`
+// pattern) silently re-applied the SSR seed when the URL explicitly
+// cleared the filter. Returns:
+//   raw === null        → initialCompanyId (param absent)
+//   raw is whitespace   → null              (param present, empty intent)
+//   otherwise           → trimmed value     (param present with value)
+// Exported for unit testing.
+export function parseCompanyParam(
+  raw: string | null,
+  initialCompanyId: string | null,
+): string | null {
+  if (raw === null) return initialCompanyId;
+  return raw.trim() || null;
+}
+
 export function GraphFilters({
   initialKinds,
   initialMinConfidence,
@@ -142,7 +161,7 @@ export function GraphFilters({
   const urlMinConf = parseMinConfParam(searchParams.get("minConfidence")) ?? initialMinConfidence;
   const urlMinDeg = parseMinDegreeParam(searchParams.get("minDegree")) ?? initialMinDegree;
   const urlCap = parseCapParam(searchParams.get("cap")) ?? initialCap;
-  const urlCompanyId = (searchParams.get("company")?.trim() || null) ?? initialCompanyId;
+  const urlCompanyId = parseCompanyParam(searchParams.get("company"), initialCompanyId);
   const urlScope = parseScopeParam(searchParams.get("scope")) ?? initialScope;
   const [kinds, setKinds] = useState<GraphEdgeKind[]>(urlKinds);
   const [minConfidence, setMinConfidence] = useState<number>(urlMinConf);
