@@ -298,3 +298,148 @@ describe("ingestLinkedInExport — duplicate detection (ISC-16 shortcut)", () =>
     expect(second.messageStats).toBeUndefined();
   });
 });
+
+describe("writeOwner — rename re-ingest preserves owner id (v0.4.2)", () => {
+  let result: {
+    firstOwnerId: string;
+    secondOwnerId: string;
+    idsMatch: boolean;
+    peopleRowCount: number;
+    ownerFullName: string;
+    ownerHeadline: string | null;
+    connectionResolvesToOwner: boolean;
+  };
+  let cleanup: () => void;
+
+  beforeAll(async () => {
+    const fresh = await freshDbWithMigrations();
+    cleanup = fresh.cleanup;
+    result = await runSubprocessScript(
+      fresh.dbPath,
+      `
+        const { db, schema, LOCAL_TENANT_ID } = await import(
+          "${REPO_ROOT}/src/lib/db/index.ts"
+        );
+        const { writeOwner } = await import(
+          "${REPO_ROOT}/src/lib/linkedin/ingest.ts"
+        );
+        const { eq } = await import("drizzle-orm");
+        const tenantId = LOCAL_TENANT_ID;
+        const now = new Date();
+
+        // Tenant + export-batch rows (writeOwner expects the tenant to exist;
+        // people.sourceBatchId FK requires the batch rows to exist too — the
+        // real ingest path creates both earlier; here we seed them directly).
+        await db
+          .insert(schema.tenants)
+          .values({ id: tenantId, createdAt: now })
+          .onConflictDoNothing();
+        await db.insert(schema.exportBatches).values([
+          { id: "batch-1", tenantId, source: "linkedin", uploadedAt: now, filename: "first.zip", sha256: "x".repeat(64) },
+          { id: "batch-2", tenantId, source: "linkedin", uploadedAt: now, filename: "second.zip", sha256: "y".repeat(64) },
+        ]);
+
+        // First ingest: owner is "Alice Engineer".
+        await writeOwner(
+          { profile: { fullName: "Alice Engineer", headline: "Builder" } },
+          tenantId,
+          "batch-1",
+          now,
+        );
+        const tenant1 = await db
+          .select()
+          .from(schema.tenants)
+          .where(eq(schema.tenants.id, tenantId))
+          .limit(1);
+        const firstOwnerId = tenant1[0].ownerPersonId;
+
+        // A connection pointing AT the original owner id — proxy for every
+        // existing FK reference (positions.person_id, manual_edges.person_a/b,
+        // messages.from_person_id) that would orphan after a rename.
+        await db.insert(schema.people).values({
+          id: "peer-1",
+          tenantId,
+          fullName: "Bob Peer",
+          headline: null,
+          email: null,
+          linkedinUrl: "https://linkedin.com/in/bob",
+          sourceBatchId: "batch-1",
+          firstSeen: now,
+          lastSeen: now,
+        });
+        await db.insert(schema.connections).values({
+          tenantId,
+          fromPersonId: firstOwnerId,
+          toPersonId: "peer-1",
+          source: "linkedin",
+          connectedAt: "2024-01-01",
+        });
+
+        // Second ingest: owner renamed to "Alice Smith" (the bug scenario).
+        await writeOwner(
+          { profile: { fullName: "Alice Smith", headline: "Senior Engineer" } },
+          tenantId,
+          "batch-2",
+          new Date(),
+        );
+
+        const tenant2 = await db
+          .select()
+          .from(schema.tenants)
+          .where(eq(schema.tenants.id, tenantId))
+          .limit(1);
+        const secondOwnerId = tenant2[0].ownerPersonId;
+
+        const peopleRows = await db
+          .select()
+          .from(schema.people)
+          .where(eq(schema.people.tenantId, tenantId));
+
+        const ownerRow = await db
+          .select()
+          .from(schema.people)
+          .where(eq(schema.people.id, secondOwnerId))
+          .limit(1);
+
+        const conn = await db
+          .select()
+          .from(schema.connections)
+          .where(eq(schema.connections.fromPersonId, secondOwnerId));
+
+        console.log(
+          "${RESULT_MARKER}" +
+            JSON.stringify({
+              firstOwnerId,
+              secondOwnerId,
+              idsMatch: firstOwnerId === secondOwnerId,
+              peopleRowCount: peopleRows.length,
+              ownerFullName: ownerRow[0]?.fullName,
+              ownerHeadline: ownerRow[0]?.headline,
+              connectionResolvesToOwner: conn.length === 1,
+            }),
+        );
+      `,
+    );
+  }, 60_000);
+
+  test("rename re-ingest: tenants.ownerPersonId is unchanged", () => {
+    expect(result.idsMatch).toBe(true);
+  });
+
+  test("rename re-ingest: no second owner row created", () => {
+    // 2 = owner + peer-1; would be 3 under the pre-fix sha1-from-name path
+    expect(result.peopleRowCount).toBe(2);
+  });
+
+  test("rename re-ingest: owner row's fullName is updated to new name", () => {
+    expect(result.ownerFullName).toBe("Alice Smith");
+  });
+
+  test("rename re-ingest: owner row's headline is updated", () => {
+    expect(result.ownerHeadline).toBe("Senior Engineer");
+  });
+
+  test("rename re-ingest: pre-existing connection FK still resolves to owner", () => {
+    expect(result.connectionResolvesToOwner).toBe(true);
+  });
+});

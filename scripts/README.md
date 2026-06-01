@@ -13,6 +13,7 @@ file/DB checks that need no server.
 | `wipe-batch.ts` | Drop `export_batches` for the local tenant + null out `people.source_batch_id` so a re-ingest exercises the full pipeline | no |
 | `ingest-cli.ts` | Run `ingestLinkedInExport` on a `.zip` from disk — useful when the upload route is broken or for CI-style bulk ingest | no |
 | `derive-cli.ts` | Rebuild `derived_edges` for the local tenant from scratch (idempotent — clear-then-rebuild). Hook this when positions change outside the normal ingest flow | no |
+| `repair-owner-orphans.ts` | One-shot recovery for tenants that suffered the pre-v0.4.2 owner-rename orphaning bug — rewrites stranded FKs in connections / positions / manual_edges / messages onto the current `tenants.ownerPersonId`, re-derives shared-employer edges, then deletes the stranded people row. Default DRY-RUN; pass `--apply` to mutate | no |
 | `sample-edges.ts` | Quick DB sample of derived edges (kinds, confidences, JSON evidence) for a sanity glance | no |
 
 ## Isolation gates (v0.3.3+)

@@ -125,29 +125,71 @@ export async function ingestLinkedInExport(
   return { batchId, duplicate: false, counts, messageStats };
 }
 
-async function writeOwner(
+// v0.4.2: re-ingest with a changed owner display name (marriage, accent fix,
+// formal↔casual rename on LinkedIn) used to silently orphan the entire tenant.
+// The original derivation `ownerPersonId(tenantId, fullName)` hashed the name
+// into the owner's primary key, so a renamed re-ingest inserted a SECOND owner
+// row with a different id, flipped tenants.ownerPersonId to that new id, and
+// left every existing connection/position/manual_edge FK reference pointing at
+// the old now-dead id. /people /graph /queries/reach all silently returned
+// owner-empty results until manual DB surgery. New behaviour: if the tenant
+// already has an ownerPersonId AND that people row still exists, reuse that
+// id; update fullName/headline/lastSeen in place. Only the very first ingest
+// (or a corrupted-state recovery where the referenced row vanished) takes the
+// sha1-from-name insert path.
+export async function writeOwner(
   parsed: ParsedExport,
   tenantId: string,
   batchId: string,
   now: Date,
 ) {
-  const id = ownerPersonId(tenantId, parsed.profile.fullName);
-  await db
-    .insert(schema.people)
-    .values({
-      id,
-      tenantId,
-      fullName: parsed.profile.fullName,
-      headline: parsed.profile.headline,
-      email: null,
-      linkedinUrl: null,
-      sourceBatchId: batchId,
-      firstSeen: now,
-      lastSeen: now,
-    })
-    .onConflictDoNothing();
+  const tenantRow = await db
+    .select()
+    .from(schema.tenants)
+    .where(eq(schema.tenants.id, tenantId))
+    .limit(1);
+  const existingOwnerId = tenantRow[0]?.ownerPersonId ?? null;
 
-  // ISC-17: tenants.owner_person_id set
+  let existingOwnerRow: typeof schema.people.$inferSelect | undefined;
+  if (existingOwnerId) {
+    const rows = await db
+      .select()
+      .from(schema.people)
+      .where(eq(schema.people.id, existingOwnerId))
+      .limit(1);
+    existingOwnerRow = rows[0];
+  }
+
+  let id: string;
+  if (existingOwnerRow) {
+    id = existingOwnerRow.id;
+    await db
+      .update(schema.people)
+      .set({
+        fullName: parsed.profile.fullName,
+        headline: parsed.profile.headline,
+        lastSeen: now,
+      })
+      .where(eq(schema.people.id, id));
+  } else {
+    id = ownerPersonId(tenantId, parsed.profile.fullName);
+    await db
+      .insert(schema.people)
+      .values({
+        id,
+        tenantId,
+        fullName: parsed.profile.fullName,
+        headline: parsed.profile.headline,
+        email: null,
+        linkedinUrl: null,
+        sourceBatchId: batchId,
+        firstSeen: now,
+        lastSeen: now,
+      })
+      .onConflictDoNothing();
+  }
+
+  // ISC-17: tenants.owner_person_id set (idempotent when id is unchanged)
   await db
     .update(schema.tenants)
     .set({ ownerPersonId: id })
@@ -316,9 +358,18 @@ async function readTenantCounts(tenantId: string) {
 
 // Backfill the owner's linkedin_url from messages.csv detection. Writes only
 // when the parser successfully inferred the URL (FROM == owner.fullName).
+// v0.4.2: read the owner id from tenants (single source of truth) rather than
+// recomputing from fullName — after a rename re-ingest the name-derived sha1
+// no longer matches the persisted owner row.
 async function backfillOwnerLinkedinUrl(parsed: ParsedExport, tenantId: string) {
   if (!parsed.ownerProfileUrl) return;
-  const id = ownerPersonId(tenantId, parsed.profile.fullName);
+  const tenantRow = await db
+    .select()
+    .from(schema.tenants)
+    .where(eq(schema.tenants.id, tenantId))
+    .limit(1);
+  const id = tenantRow[0]?.ownerPersonId;
+  if (!id) return;
   await db
     .update(schema.people)
     .set({ linkedinUrl: parsed.ownerProfileUrl })
@@ -355,7 +406,15 @@ async function writeMessages(
   };
   if (parsed.messages.length === 0) return base;
 
-  const ownerId = ownerPersonId(tenantId, parsed.profile.fullName);
+  // v0.4.2: read owner id from tenants — the name-derived sha1 diverges from
+  // the persisted owner row after a rename re-ingest (see writeOwner comment).
+  const tenantRow = await db
+    .select()
+    .from(schema.tenants)
+    .where(eq(schema.tenants.id, tenantId))
+    .limit(1);
+  const ownerId = tenantRow[0]?.ownerPersonId;
+  if (!ownerId) return base;
   const ownerUrl = parsed.ownerProfileUrl;
 
   // Pre-fetch the tenant's valid people IDs once — O(N) lookup instead of
