@@ -6,6 +6,7 @@ import {
   parseMessageDate,
   parseMessages,
   parsePositionDate,
+  parsePositions,
 } from "./parse";
 
 const REAL_EXPORT_PATH =
@@ -28,6 +29,48 @@ describe("date parsers", () => {
   test("ISC-5: empty position date → null (signals current)", () => {
     expect(parsePositionDate("")).toBeNull();
     expect(parsePositionDate("   ")).toBeNull();
+  });
+});
+
+describe("v0.4.3: parsePositions — `current` requires startRaw, not just absent endRaw", () => {
+  const HEADER = `"Company Name","Title","Description","Location","Started On","Finished On"`;
+  const positionFromRow = (row: string) =>
+    parsePositions(`${HEADER}\n${row}`)[0]!;
+
+  test("declared current position (start, no end) → current=true", () => {
+    const p = positionFromRow(`"Acme","Engineer","","","Jan 2024",""`);
+    expect(p.current).toBe(true);
+    expect(p.startDate).toBe("2024-01-01");
+    expect(p.endDate).toBeNull();
+  });
+
+  test("declared past position (start and end) → current=false", () => {
+    const p = positionFromRow(`"Acme","Engineer","","","Jan 2020","Dec 2023"`);
+    expect(p.current).toBe(false);
+    expect(p.startDate).toBe("2020-01-01");
+    expect(p.endDate).toBe("2023-12-01");
+  });
+
+  test("the bug case — title + description but NO Started On AND NO Finished On → current=false (was true)", () => {
+    const p = positionFromRow(
+      `"Local Volunteers","Volunteer","Helped on Saturdays","",""`,
+    );
+    // Pre-fix: `current: !endRaw` ⇒ true (the bug). Post-fix:
+    // `current: Boolean(startRaw) && !endRaw` ⇒ false.
+    expect(p.current).toBe(false);
+    expect(p.startDate).toBeNull();
+    expect(p.endDate).toBeNull();
+  });
+
+  test("anomalous row — no start but has end → current=false (unchanged)", () => {
+    const p = positionFromRow(`"Acme","Engineer","","","","Dec 2023"`);
+    expect(p.current).toBe(false);
+  });
+
+  test("whitespace-only Started On is treated as absent → current=false", () => {
+    const p = positionFromRow(`"Acme","Engineer","","","   ",""`);
+    expect(p.current).toBe(false);
+    expect(p.startDate).toBeNull();
   });
 });
 

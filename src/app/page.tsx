@@ -3,6 +3,7 @@ import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { assembleNetworkGraph } from "@/lib/queries/graph";
+import { STRAND_VERSION_LABEL } from "@/lib/version";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,7 @@ export default async function HomePage() {
       <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-8 py-16">
         <div className="rounded-lg border border-border-subtle bg-overlay/85 px-8 py-7 text-center shadow-2xl backdrop-blur-md">
           <p className="font-mono text-[11px] uppercase tracking-wide text-text-tertiary">
-            v0.2.0 — alpha
+            {STRAND_VERSION_LABEL}
           </p>
           <h1 className="mt-2 font-display text-5xl font-semibold tracking-tight">
             Strand

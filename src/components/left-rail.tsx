@@ -12,6 +12,7 @@ import {
   Upload,
   type LucideIcon,
 } from "lucide-react";
+import { STRAND_VERSION_LABEL } from "@/lib/version";
 
 type RailRoute = {
   href: string;
@@ -113,7 +114,7 @@ export function LeftRail() {
           <span>search</span>
         </div>
         <p className="font-mono text-[10px] uppercase tracking-wide text-text-tertiary opacity-0 transition-opacity duration-base ease-cubic-out group-hover/rail:opacity-100 group-focus-within/rail:opacity-100">
-          v0.2.0 — alpha
+          {STRAND_VERSION_LABEL}
         </p>
       </div>
     </nav>

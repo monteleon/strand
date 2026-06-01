@@ -219,7 +219,9 @@ function parseConnections(text: string): LinkedInConnection[] {
   return out;
 }
 
-function parsePositions(text: string): LinkedInPosition[] {
+// Exported for unit testing — runtime ingest path goes through
+// parseLinkedInExport, which is the only other caller.
+export function parsePositions(text: string): LinkedInPosition[] {
   const { headers, rows } = readCsv(text, "Company Name");
   return rows.map((row) => {
     const companyName = col(headers, row, "Company Name").trim();
@@ -237,7 +239,16 @@ function parsePositions(text: string): LinkedInPosition[] {
       location: location || null,
       startDate,
       endDate,
-      current: !endRaw,
+      // v0.4.3: a position is "current" only when there's a known start AND no
+      // finish. Pre-fix `current: !endRaw` flipped to true for undated rows
+      // (e.g. a Volunteer entry with title + description but neither Started
+      // On nor Finished On) — those rows then got persisted with current=true
+      // and joined the derived "currently together" pool, inflating
+      // shared_employer_currently confidence (0.5 → 0.7 when paired with a
+      // declared current position at the same company). "Current since when?"
+      // is unanswerable without a start date, so undated rows are now
+      // current=false.
+      current: Boolean(startRaw) && !endRaw,
     };
   });
 }
