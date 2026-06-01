@@ -56,7 +56,8 @@ export async function getPersonInspector(
     ORDER BY
       CASE po.origin WHEN 'declared' THEN 0 ELSE 1 END,
       po.current DESC,
-      COALESCE(po.start_date, '0000-00-00') DESC
+      COALESCE(po.start_date, '0000-00-00') DESC,
+      po.id ASC
     LIMIT 1
   `);
 
