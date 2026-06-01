@@ -176,6 +176,18 @@ export async function assembleNetworkGraph(
   `);
   const ownerId = tenantRow?.owner_person_id ?? null;
 
+  // v0.4.1: when a `companyId` filter is set AND the owner is NOT a declared
+  // employee of that company, the only edges among the colleagues are
+  // `shared_employer_currently` at 0.5 confidence — below the default 0.7
+  // slider. Auto-relax the effective floor to 0 in that case so the
+  // within-company structure renders (the colleagues are not strangers; they
+  // overlap at the named company today). When the owner IS at the company
+  // (e.g. PwC España), every colleague has a ≥0.7 owner-anchored edge and
+  // relaxing the floor would push the rendered edge count from ~143 to
+  // ~10,000+ — the exact hairball the W6 EDGE_CAP comment warns against —
+  // so the slider is honoured in that case. Computed below allowedPersonIds.
+  let effectiveMinConfidence = minConfidence;
+
   // v0.4.0 (ISC-370, ISC-371): when companyId is set, precompute the allowed
   // person-id set. "current" mode uses the v0.3.4 ROW_NUMBER selection rule
   // to pick each person's current employer; "ever" mode includes any person
@@ -219,6 +231,9 @@ export async function assembleNetworkGraph(
     }
     // If the company has zero matching people, short-circuit to empty —
     // owner is still added below per ISC-373 (rendered disconnected).
+    if (ownerId && !allowedPersonIds.has(ownerId)) {
+      effectiveMinConfidence = 0;
+    }
   }
 
   // Candidate people: incident manual OR incident derived edges that pass the
@@ -254,7 +269,7 @@ export async function assembleNetworkGraph(
       FROM derived_edges e
       CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1 AS n) endpoints
       WHERE e.tenant_id = ${tenantId}
-        AND e.confidence >= ${minConfidence}
+        AND e.confidence >= ${effectiveMinConfidence}
         AND e.kind IN (${derivedKindList})
     `);
   }
@@ -281,8 +296,45 @@ export async function assembleNetworkGraph(
   // selection. With a company filter active, owner may render disconnected
   // (their cluster colour empty) — that's the correct behaviour. The user
   // asked "who at X" and they aren't there.
-  const filteredCandidates = allowedPersonIds
-    ? candidates.filter((c) => allowedPersonIds!.has(c.person_id))
+  //
+  // v0.4.1: when a company filter is active, the candidate set IS the people
+  // at that company — not the intersection with edge-qualified people.
+  // Without this, picking a company where the owner has no declared position
+  // (e.g. KPMG, Lloyds Bank International) returned just the owner: the
+  // connection-to-connection derived edges among those colleagues are
+  // shared_employer_currently at 0.5 confidence, below the 0.7 candidate
+  // floor, so the intersection was empty. The candidate-edge metrics still
+  // drive ORDER within the cap (most-connected first); they no longer gate
+  // the SET when the user has explicitly named a company.
+  const candidateMetrics = new Map<
+    string,
+    { best_confidence: number; edge_count: number }
+  >();
+  for (const c of candidates) {
+    candidateMetrics.set(c.person_id, {
+      best_confidence: c.best_confidence,
+      edge_count: c.edge_count,
+    });
+  }
+  const filteredCandidates: {
+    person_id: string;
+    best_confidence: number;
+    edge_count: number;
+  }[] = allowedPersonIds
+    ? Array.from(allowedPersonIds)
+        .map((id) => {
+          const m = candidateMetrics.get(id);
+          return {
+            person_id: id,
+            best_confidence: m?.best_confidence ?? 0,
+            edge_count: m?.edge_count ?? 0,
+          };
+        })
+        .sort(
+          (a, b) =>
+            b.best_confidence - a.best_confidence ||
+            b.edge_count - a.edge_count,
+        )
     : candidates;
   const selectedIds = new Set<string>();
   if (ownerId) selectedIds.add(ownerId);
@@ -384,7 +436,7 @@ export async function assembleNetworkGraph(
       CAST(json_extract(evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months
     FROM derived_edges
     WHERE tenant_id = ${tenantId}
-      AND confidence >= ${minConfidence}
+      AND confidence >= ${effectiveMinConfidence}
       AND kind IN (${sql.join(derivedDbKinds.map((k) => sql`${k}`), sql`, `)})
       AND person_a IN (${sql.join(idsList.map((id) => sql`${id}`), sql`, `)})
       AND person_b IN (${sql.join(idsList.map((id) => sql`${id}`), sql`, `)})
@@ -490,10 +542,13 @@ export async function assembleNetworkGraph(
     meta: {
       nodeCap: NODE_CAP,
       edgeCap: EDGE_CAP,
-      // Reflect the active filter so the UI's "confidence floor" stat
-      // matches the slider position rather than the project-default constant.
-      highConfidenceFloor: minConfidence,
-      edgeFloor: minConfidence,
+      // Reflect the EFFECTIVE filter so the UI's "confidence floor" stat
+      // matches what was actually applied. When the company-auto-relax kicks
+      // in (companyId set, owner not at company), this drops to 0 even though
+      // the slider shows the user's chosen value — that divergence is the
+      // signal that the company filter unlocked the within-company edges.
+      highConfidenceFloor: effectiveMinConfidence,
+      edgeFloor: effectiveMinConfidence,
       candidateCount: filteredCandidates.length,
       selectedCount: nodes.length,
       totalEdges: finalEdges.length,

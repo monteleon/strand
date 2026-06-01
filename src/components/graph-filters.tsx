@@ -179,11 +179,12 @@ export function GraphFilters({
     initialCompanyName,
   ]);
 
-  // Single canonical URL writer. Same pattern as `?selected=` in
-  // graph-canvas.tsx — history.pushState + router.refresh — because
-  // Next 14 App Router silently dedups query-only router.push/replace
-  // on the same pathname in this app. Documented in ISA Decisions
-  // (2026-05-19 v0.2.0 graph URL pattern).
+  // Single canonical URL writer. router.push navigates the App Router AND
+  // triggers an RSC refetch for this dynamic = "force-dynamic" route.
+  // Earlier versions used history.pushState + router.refresh, but refresh
+  // re-fetches against the router's tree URL (unchanged by pushState), so
+  // server-side filters silently no-op'd until a hard navigation.
+  // scroll: false preserves graph viewport across filter changes.
   const apply = useCallback(
     (
       nextKinds: GraphEdgeKind[],
@@ -204,9 +205,8 @@ export function GraphFilters({
       );
       const current = window.location.pathname + window.location.search;
       if (url !== current) {
-        window.history.pushState(null, "", url);
+        router.push(url, { scroll: false });
       }
-      router.refresh();
     },
     [router],
   );
