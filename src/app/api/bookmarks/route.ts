@@ -3,6 +3,7 @@ import {
   createSavedQuery,
   listSavedQueries,
 } from "@/lib/queries/savedQueries";
+import { isLocalAppPath } from "@/lib/url-validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,12 +40,13 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  // Local-first invariant: bookmarks point at in-app URLs only. A relative
-  // path starting with `/` and NOT `//` (which would be a protocol-relative
-  // URL pointing offsite). Blocks a client from saving a bookmark to
-  // https://evil.com that would render as a normal link in the sidebar.
+  // Local-first invariant: bookmarks point at in-app URLs only.
+  // isLocalAppPath rejects everything that resolves to a different origin
+  // after WHATWG URL parsing — `//evil.com`, `https://evil.com`,
+  // `/\evil.com` (browsers normalise backslash to slash, so the old
+  // string-only check let this through), `javascript:`, and so on.
   const trimmedUrl = body.url.trim();
-  if (!trimmedUrl.startsWith("/") || trimmedUrl.startsWith("//")) {
+  if (!isLocalAppPath(trimmedUrl)) {
     return NextResponse.json(
       { error: "url must be a relative in-app path (starts with /)" },
       { status: 400 },
