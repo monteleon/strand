@@ -29,13 +29,27 @@ export function CompanyPicker({
       setCandidates([]);
       return;
     }
+    // v0.4.20 (review-#8): cancelled guard around setCandidates.
+    // fetchResults swallows AbortError into [] (the helper's
+    // contract); without this guard, a stale aborted request's
+    // .then(setCandidates([])) could land AFTER the newer request's
+    // setCandidates(real) and wipe the dropdown. The .catch(()=>{})
+    // pattern this typeahead used pre-v0.4.12 did not trigger
+    // setCandidates on abort at all — the helper's [] resolution is
+    // newer behaviour and needs the guard to match the original UX.
+    let cancelled = false;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     fetchResults<Candidate>(
       `/api/companies/search?q=${encodeURIComponent(q)}`,
       { signal: ctrl.signal },
-    ).then(setCandidates);
+    ).then((rs) => {
+      if (!cancelled) setCandidates(rs);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [q]);
 
   return (

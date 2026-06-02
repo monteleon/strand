@@ -39,14 +39,17 @@ describe("fetchResults adoption — typeahead components must use the helper", (
     });
   }
 
-  test("person-picker.tsx and add-connection.tsx use a cancelled guard around setCandidates", () => {
+  test("all typeahead consumers use a cancelled guard around setCandidates", () => {
     // fetchResults swallows AbortError into []; an unguarded
     // .then(setCandidates) on the aborted promise can land after the
     // newer request's success and wipe the dropdown. The cancelled flag
     // pattern (same shape as command-palette.tsx) prevents that.
+    // company-picker.tsx joins the list at v0.4.20 (review-#8); it
+    // adopted fetchResults at v0.4.12 but missed the guard.
     for (const path of [
       "src/components/person-picker.tsx",
       "src/components/add-connection.tsx",
+      "src/components/company-picker.tsx",
     ]) {
       const src = readFileSync(`${REPO_ROOT}/${path}`, "utf8");
       expect(src).toMatch(/let\s+cancelled\s*=\s*false/);
