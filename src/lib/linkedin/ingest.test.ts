@@ -561,3 +561,181 @@ describe("writePositions — endDate corrections land via UPSERT (v0.4.6, /code-
     expect(result.afterNoChange.current).toBe(true);
   });
 });
+
+describe("v0.4.17 (review-#5): writeCompanies / writePeople / writeConnections UPSERT mutable fields on re-ingest", () => {
+  let result: {
+    companyAfterFirst:   { count: number; name: string | null };
+    companyAfterRename:  { count: number; name: string | null };
+    personAfterFirst:    { count: number; fullName: string; headline: string | null; email: string | null };
+    personAfterCorrect:  { count: number; fullName: string; headline: string | null; email: string | null };
+    connAfterFirst:      { count: number; connectedAt: string | null };
+    connAfterCorrect:    { count: number; connectedAt: string | null };
+  };
+  let cleanup: () => void;
+
+  beforeAll(async () => {
+    const fresh = await freshDbWithMigrations();
+    cleanup = fresh.cleanup;
+    result = await runSubprocessScript(
+      fresh.dbPath,
+      `
+        const { db, schema, LOCAL_TENANT_ID } = await import("${REPO_ROOT}/src/lib/db/index.ts");
+        const { writeOwner, writeCompanies, writePeople, writeConnections } =
+          await import("${REPO_ROOT}/src/lib/linkedin/ingest.ts");
+        const { eq, and } = await import("drizzle-orm");
+        const { createHash } = await import("node:crypto");
+        const now = new Date();
+        const tenantId = LOCAL_TENANT_ID;
+
+        await db.insert(schema.tenants).values({ id: tenantId, createdAt: now }).onConflictDoNothing();
+        await db.insert(schema.exportBatches).values({
+          id: "batch-1", tenantId, source: "linkedin", uploadedAt: now,
+          filename: "x.zip", sha256: "x".repeat(64),
+        });
+        await writeOwner(
+          { profile: { fullName: "Owner", headline: null } },
+          tenantId, "batch-1", now,
+        );
+
+        // -------- writeCompanies UPSERT --------
+        // First ingest: company display name "PWC" (all caps).
+        // Second ingest: corrected casing "PwC España". normaliseCompany
+        // strips diacritics and lowercases, so "PWC" → "pwc" and
+        // "PwC España" → "pwc espana" → DIFFERENT id (two rows).
+        // For a UPSERT to fire we need the same normalized name. Use a
+        // pure casing/whitespace difference instead:
+        //   "PwC España" and "pwc  españa" both normalise to "pwc espana".
+        const parsedCompanies = (raw) => ({
+          profile: { fullName: "Owner", headline: null },
+          connections: [],
+          positions: [{
+            companyName: raw, title: "X", description: null, location: null,
+            startDate: "2020-01-01", endDate: null, current: true,
+          }],
+          messages: [],
+          ownerProfileUrl: null,
+          messagesParseStats: { parsed: 0, expanded: 0, skipped_no_url: 0, skipped_no_date: 0 },
+        });
+        await writeCompanies(parsedCompanies("pwc  españa"), tenantId);
+        const companyAfterFirst = await (async () => {
+          const rows = await db.select().from(schema.companies).where(eq(schema.companies.tenantId, tenantId));
+          return { count: rows.length, name: rows[0]?.name ?? null };
+        })();
+
+        await writeCompanies(parsedCompanies("PwC España"), tenantId);
+        const companyAfterRename = await (async () => {
+          const rows = await db.select().from(schema.companies).where(eq(schema.companies.tenantId, tenantId));
+          return { count: rows.length, name: rows[0]?.name ?? null };
+        })();
+
+        // -------- writePeople UPSERT --------
+        // First ingest: connection Alice with headline "Engineer", no email.
+        // Second ingest: corrected headline "Senior Engineer" + email added.
+        const parsedPeople = (overrides) => ({
+          profile: { fullName: "Owner", headline: null },
+          connections: [{
+            linkedinUrl: "https://www.linkedin.com/in/alice",
+            fullName: "Alice",
+            firstName: "Alice",
+            lastName: "",
+            position: "Engineer",
+            company: null,
+            email: null,
+            connectedAt: "2020-01-01",
+            ...overrides,
+          }],
+          positions: [],
+          messages: [],
+          ownerProfileUrl: null,
+          messagesParseStats: { parsed: 0, expanded: 0, skipped_no_url: 0, skipped_no_date: 0 },
+        });
+        await writePeople(parsedPeople({}), tenantId, "batch-1", now);
+        const personAfterFirst = await (async () => {
+          const rows = await db.select().from(schema.people).where(eq(schema.people.tenantId, tenantId));
+          const alice = rows.find((r) => r.fullName === "Alice");
+          return {
+            count: rows.length,
+            fullName: alice?.fullName ?? "",
+            headline: alice?.headline ?? null,
+            email: alice?.email ?? null,
+          };
+        })();
+
+        await writePeople(
+          parsedPeople({ position: "Senior Engineer", email: "alice@example.com" }),
+          tenantId, "batch-1", now,
+        );
+        const personAfterCorrect = await (async () => {
+          const rows = await db.select().from(schema.people).where(eq(schema.people.tenantId, tenantId));
+          const alice = rows.find((r) => r.fullName === "Alice");
+          return {
+            count: rows.length,
+            fullName: alice?.fullName ?? "",
+            headline: alice?.headline ?? null,
+            email: alice?.email ?? null,
+          };
+        })();
+
+        // -------- writeConnections UPSERT --------
+        // First ingest: connectedAt = "2020-01-01"
+        // Second ingest: LinkedIn re-issues connectedAt = "2020-01-15" (rare but real).
+        await writeConnections(parsedPeople({}), tenantId, now);
+        const connAfterFirst = await (async () => {
+          const rows = await db.select().from(schema.connections).where(eq(schema.connections.tenantId, tenantId));
+          return { count: rows.length, connectedAt: rows[0]?.connectedAt ?? null };
+        })();
+
+        await writeConnections(
+          parsedPeople({ connectedAt: "2020-01-15" }),
+          tenantId,
+          now,
+        );
+        const connAfterCorrect = await (async () => {
+          const rows = await db.select().from(schema.connections).where(eq(schema.connections.tenantId, tenantId));
+          return { count: rows.length, connectedAt: rows[0]?.connectedAt ?? null };
+        })();
+
+        console.log("${RESULT_MARKER}" + JSON.stringify({
+          companyAfterFirst, companyAfterRename,
+          personAfterFirst, personAfterCorrect,
+          connAfterFirst, connAfterCorrect,
+        }));
+      `,
+    );
+  }, 60_000);
+
+  test("writeCompanies: first ingest stores the raw display name", () => {
+    expect(result.companyAfterFirst.count).toBe(1);
+    expect(result.companyAfterFirst.name).toBe("pwc  españa");
+  });
+
+  test("writeCompanies: re-ingest with same normalised name UPSERTs display-name (pre-fix silently dropped the correction)", () => {
+    // Both "pwc  españa" and "PwC España" normalise to "pwc espana" → same
+    // company id. Post-fix the display `name` is updated; pre-fix
+    // onConflictDoNothing kept the original lower/whitespace version.
+    expect(result.companyAfterRename.count).toBe(1);
+    expect(result.companyAfterRename.name).toBe("PwC España");
+  });
+
+  test("writePeople: first ingest captures headline + email as given", () => {
+    expect(result.personAfterFirst.fullName).toBe("Alice");
+    expect(result.personAfterFirst.headline).toBe("Engineer");
+    expect(result.personAfterFirst.email).toBeNull();
+  });
+
+  test("writePeople: re-ingest UPSERTs headline AND email correction (no second row)", () => {
+    expect(result.personAfterCorrect.count).toBe(result.personAfterFirst.count);
+    expect(result.personAfterCorrect.headline).toBe("Senior Engineer");
+    expect(result.personAfterCorrect.email).toBe("alice@example.com");
+  });
+
+  test("writeConnections: first ingest stores the original connectedAt", () => {
+    expect(result.connAfterFirst.count).toBe(1);
+    expect(result.connAfterFirst.connectedAt).toBe("2020-01-01");
+  });
+
+  test("writeConnections: re-ingest UPSERTs the corrected connectedAt (no second row)", () => {
+    expect(result.connAfterCorrect.count).toBe(1);
+    expect(result.connAfterCorrect.connectedAt).toBe("2020-01-15");
+  });
+});

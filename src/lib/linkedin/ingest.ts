@@ -204,7 +204,7 @@ function isPlaceholderCompany(normalized: string): boolean {
   return !/[a-z0-9]/.test(normalized);
 }
 
-async function writeCompanies(parsed: ParsedExport, tenantId: string) {
+export async function writeCompanies(parsed: ParsedExport, tenantId: string) {
   // Union of companies from positions + connections.company text.
   const names = new Set<string>();
   for (const p of parsed.positions) {
@@ -216,6 +216,12 @@ async function writeCompanies(parsed: ParsedExport, tenantId: string) {
   for (const raw of names) {
     const normalized = normaliseCompany(raw);
     if (!normalized || isPlaceholderCompany(normalized)) continue;
+    // v0.4.17 (review-#5): UPSERT the display `name`. Same identity
+    // (id derived from normalized name) but the human-facing casing
+    // can drift across exports ("Pwc" → "PwC España"). Pre-fix
+    // onConflictDoNothing silently dropped the corrected name; users
+    // saw the first-imported version forever. normalizedName is fixed
+    // by definition (it's how we derive id), so don't touch it.
     await db
       .insert(schema.companies)
       .values({
@@ -224,11 +230,14 @@ async function writeCompanies(parsed: ParsedExport, tenantId: string) {
         name: raw,
         normalizedName: normalized,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: schema.companies.id,
+        set: { name: raw },
+      });
   }
 }
 
-async function writePeople(
+export async function writePeople(
   parsed: ParsedExport,
   tenantId: string,
   batchId: string,
@@ -237,6 +246,14 @@ async function writePeople(
   for (const c of parsed.connections) {
     if (!c.linkedinUrl) continue; // no URL → cannot dedup; skip rather than corrupt
     const id = personIdFromUrl(tenantId, c.linkedinUrl);
+    // v0.4.17 (review-#5): UPSERT mutable fields so re-ingest reflects
+    // the latest export. Pre-fix onConflictDoNothing silently dropped
+    // every connection-side correction — a renamed contact, a new
+    // headline, a fixed email — the user could not get those to land
+    // without manual DB surgery. Identity (id from linkedinUrl) is
+    // stable; we update fullName, headline, email, and lastSeen.
+    // firstSeen and sourceBatchId stay frozen at the row's introduction
+    // — they record provenance, not current state.
     await db
       .insert(schema.people)
       .values({
@@ -250,11 +267,19 @@ async function writePeople(
         firstSeen: now,
         lastSeen: now,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: schema.people.id,
+        set: {
+          fullName: c.fullName || `${c.firstName} ${c.lastName}`.trim(),
+          headline: c.position,
+          email: c.email,
+          lastSeen: now,
+        },
+      });
   }
 }
 
-async function writeConnections(parsed: ParsedExport, tenantId: string, now: Date) {
+export async function writeConnections(parsed: ParsedExport, tenantId: string, now: Date) {
   const tenantRow = await db
     .select()
     .from(schema.tenants)
@@ -268,6 +293,12 @@ async function writeConnections(parsed: ParsedExport, tenantId: string, now: Dat
     if (!c.linkedinUrl) continue;
     const toId = personIdFromUrl(tenantId, c.linkedinUrl);
     if (toId === ownerId) continue; // ISC-38: owner never appears as to_person_id
+    // v0.4.17 (review-#5): UPSERT connectedAt. The PK is
+    // (tenantId, fromPersonId, toPersonId); source is immutable
+    // ("linkedin" is the only value). LinkedIn occasionally re-issues
+    // a different `Connected On` value for the same connection (their
+    // backfills, locale changes, edge cases) — pre-fix the second
+    // ingest's correction was silently dropped via onConflictDoNothing.
     await db
       .insert(schema.connections)
       .values({
@@ -277,7 +308,14 @@ async function writeConnections(parsed: ParsedExport, tenantId: string, now: Dat
         source: "linkedin",
         connectedAt: c.connectedAt,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: [
+          schema.connections.tenantId,
+          schema.connections.fromPersonId,
+          schema.connections.toPersonId,
+        ],
+        set: { connectedAt: c.connectedAt },
+      });
   }
 }
 
