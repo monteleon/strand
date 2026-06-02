@@ -1,5 +1,6 @@
 import { and, eq, like, ne, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
+import { escapeLikePattern } from "@/lib/db/like";
 import { PAGE_SIZE, pageWindow, type PageParams } from "@/lib/pagination";
 import {
   listAllLastContactDesc,
@@ -35,8 +36,11 @@ function baseWhere(tenantId: string, ownerId: string | null, q: string) {
     : undefined;
   // Case-insensitive substring on full_name using LIKE + LOWER. Parameterised
   // via Drizzle's bound value — `q` is never string-concatenated into SQL.
+  // LIKE wildcards in `q` are escaped so a user-typed `%` or `_` matches
+  // a literal, not the LIKE meta-character.
+  const escaped = q ? escapeLikePattern(q.toLowerCase()) : "";
   const search = q
-    ? sql`lower(${schema.people.fullName}) LIKE ${"%" + q.toLowerCase() + "%"}`
+    ? sql`lower(${schema.people.fullName}) LIKE ${"%" + escaped + "%"} ESCAPE '\\'`
     : undefined;
   return and(tenantFilter, excludeOwner, search);
 }
@@ -214,10 +218,11 @@ export async function searchPeople(
   const trimmed = q.trim();
   if (!trimmed) return [];
   const ownerId = await getOwnerId(tenantId);
+  const escaped = escapeLikePattern(trimmed.toLowerCase());
   const conditions = and(
     eq(schema.people.tenantId, tenantId),
     ownerId ? ne(schema.people.id, ownerId) : undefined,
-    sql`lower(${schema.people.fullName}) LIKE ${"%" + trimmed.toLowerCase() + "%"}`,
+    sql`lower(${schema.people.fullName}) LIKE ${"%" + escaped + "%"} ESCAPE '\\'`,
   );
   return db
     .select({

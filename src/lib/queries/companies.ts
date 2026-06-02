@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
+import { escapeLikePattern } from "@/lib/db/like";
 import { PAGE_SIZE, pageWindow, type PageParams } from "@/lib/pagination";
 
 export type CompanyPageRow = {
@@ -10,8 +11,9 @@ export type CompanyPageRow = {
 
 function baseWhere(tenantId: string, q: string) {
   const tenant = eq(schema.companies.tenantId, tenantId);
+  const escaped = q ? escapeLikePattern(q.toLowerCase()) : "";
   const search = q
-    ? sql`lower(${schema.companies.normalizedName}) LIKE ${"%" + q.toLowerCase() + "%"}`
+    ? sql`lower(${schema.companies.normalizedName}) LIKE ${"%" + escaped + "%"} ESCAPE '\\'`
     : undefined;
   return and(tenant, search);
 }
@@ -28,17 +30,10 @@ export async function searchCompanies(
 ): Promise<{ id: string; name: string; peopleCount: number }[]> {
   const trimmed = q.trim();
   if (!trimmed) return [];
-  // v0.4.0 (Advisor patch): escape LIKE wildcards (% and _) in user input.
-  // Without this, a typeahead query containing `%` or `_` would behave as
-  // a wildcard and silently return unintended matches. Drizzle parameter-
-  // binds the value, but the wildcard interpretation happens INSIDE the
-  // LIKE — escaping in the value is the right layer. `ESCAPE '\'` clause
-  // tells SQLite to treat backslash as the literal-escape character.
-  const escaped = trimmed
-    .toLowerCase()
-    .replace(/\\/g, "\\\\")
-    .replace(/%/g, "\\%")
-    .replace(/_/g, "\\_");
+  // Escape LIKE wildcards (% and _) so user-typed wildcards don't match
+  // unintended rows. See escapeLikePattern for the rationale; used with
+  // ESCAPE '\\' clause below.
+  const escaped = escapeLikePattern(trimmed.toLowerCase());
   const rows = await db.all<{
     id: string;
     name: string;
@@ -84,7 +79,7 @@ export async function listCompanies(
     FROM companies c
     LEFT JOIN positions p ON p.company_id = c.id AND p.tenant_id = c.tenant_id
     WHERE c.tenant_id = ${tenantId}
-      ${params.q ? sql`AND lower(c.normalized_name) LIKE ${"%" + params.q.toLowerCase() + "%"}` : sql``}
+      ${params.q ? sql`AND lower(c.normalized_name) LIKE ${"%" + escapeLikePattern(params.q.toLowerCase()) + "%"} ESCAPE '\\'` : sql``}
     GROUP BY c.id
     ORDER BY people_count DESC, c.name ASC
     LIMIT ${PAGE_SIZE} OFFSET ${offset}
