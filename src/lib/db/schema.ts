@@ -229,13 +229,19 @@ export const derivedEdges = sqliteTable(
         "connection_date_cluster",
       ],
     }).notNull(),
+    companyId: text("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
     evidenceJson: text("evidence_json").notNull(),
     confidence: real("confidence").notNull(),
     derivedAt: integer("derived_at", { mode: "timestamp" }).notNull(),
   },
   (t) => ({
-    pk: primaryKey({ columns: [t.tenantId, t.personA, t.personB, t.kind] }),
+    pk: primaryKey({
+      columns: [t.tenantId, t.personA, t.personB, t.kind, t.companyId],
+    }),
     aIdx: index("derived_edges_a_idx").on(t.tenantId, t.personA),
     bIdx: index("derived_edges_b_idx").on(t.tenantId, t.personB),
+    companyIdx: index("derived_edges_company_idx").on(t.tenantId, t.companyId),
   }),
 );

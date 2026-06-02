@@ -279,6 +279,7 @@ export async function deriveSharedEmployerEdges(
       personA: acc.personA,
       personB: acc.personB,
       kind,
+      companyId: acc.companyId,
       evidenceJson: evidence,
       confidence,
       derivedAt: now,
