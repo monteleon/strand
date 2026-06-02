@@ -172,7 +172,7 @@ export async function findReachToPerson(
       p.headline AS other_headline,
       e.kind,
       e.confidence,
-      json_extract(e.evidence_json, '$.companyId') AS company_id,
+      e.company_id AS company_id,
       json_extract(e.evidence_json, '$.companyName') AS company_name,
       CAST(json_extract(e.evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months,
       json_extract(e.evidence_json, '$.bothCurrent') AS both_current

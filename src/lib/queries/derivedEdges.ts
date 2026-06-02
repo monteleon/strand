@@ -63,7 +63,7 @@ export async function listDerivedEdgesForPerson(
         p.full_name AS other_name,
         e.kind,
         e.confidence,
-        json_extract(e.evidence_json, '$.companyId') AS company_id,
+        e.company_id AS company_id,
         json_extract(e.evidence_json, '$.companyName') AS company_name,
         CAST(json_extract(e.evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months,
         json_extract(e.evidence_json, '$.bothCurrent') AS both_current,
@@ -121,7 +121,7 @@ export async function listDerivedPairsAtCompany(
     JOIN people pa ON pa.id = e.person_a
     JOIN people pb ON pb.id = e.person_b
     WHERE e.tenant_id = ${tenantId}
-      AND json_extract(e.evidence_json, '$.companyId') = ${companyId}
+      AND e.company_id = ${companyId}
     ORDER BY e.confidence DESC, overlap_months DESC, pa.full_name ASC
     LIMIT ${limit}
   `);
