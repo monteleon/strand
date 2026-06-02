@@ -9,6 +9,7 @@
 // panel writes the URL itself so all three new params (cap / company /
 // scope) update atomically.
 import { useEffect, useRef, useState } from "react";
+import { fetchResults } from "@/lib/fetch-results";
 
 type Candidate = { id: string; name: string; peopleCount: number };
 
@@ -31,12 +32,10 @@ export function CompanyPicker({
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    fetch(`/api/companies/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((data: { results: Candidate[] }) => setCandidates(data.results))
-      .catch(() => {
-        /* aborted — fine */
-      });
+    fetchResults<Candidate>(
+      `/api/companies/search?q=${encodeURIComponent(q)}`,
+      { signal: ctrl.signal },
+    ).then(setCandidates);
   }, [q]);
 
   return (

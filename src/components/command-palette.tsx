@@ -15,6 +15,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { fetchResults } from "@/lib/fetch-results";
 
 type RouteEntry = {
   href: string;
@@ -86,14 +87,9 @@ export function CommandPalette() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetch("/api/bookmarks")
-      .then((r) => r.json())
-      .then((d: { results: Bookmark[] }) => {
-        if (!cancelled) setBookmarks(d.results);
-      })
-      .catch(() => {
-        /* fine */
-      });
+    fetchResults<Bookmark>("/api/bookmarks").then((results) => {
+      if (!cancelled) setBookmarks(results);
+    });
     return () => {
       cancelled = true;
     };
@@ -109,17 +105,12 @@ export function CommandPalette() {
     let cancelled = false;
     const ctrl = new AbortController();
     const t = setTimeout(() => {
-      fetch(
+      fetchResults<Person>(
         `/api/people/search?q=${encodeURIComponent(search)}&limit=8`,
         { signal: ctrl.signal },
-      )
-        .then((r) => r.json())
-        .then((d: { results: Person[] }) => {
-          if (!cancelled) setPeople(d.results);
-        })
-        .catch(() => {
-          /* aborted or transient — fine */
-        });
+      ).then((results) => {
+        if (!cancelled) setPeople(results);
+      });
     }, 200);
     return () => {
       cancelled = true;
