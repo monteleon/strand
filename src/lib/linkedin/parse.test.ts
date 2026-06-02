@@ -32,10 +32,10 @@ describe("date parsers", () => {
   });
 });
 
-describe("v0.4.3: parsePositions — `current` requires startRaw, not just absent endRaw", () => {
+describe("v0.4.3 + v0.4.15: parsePositions — null-startDate rows are DROPPED, not persisted with current=false (review-#3)", () => {
   const HEADER = `"Company Name","Title","Description","Location","Started On","Finished On"`;
-  const positionFromRow = (row: string) =>
-    parsePositions(`${HEADER}\n${row}`)[0]!;
+  const parse = (row: string) => parsePositions(`${HEADER}\n${row}`);
+  const positionFromRow = (row: string) => parse(row)[0]!;
 
   test("declared current position (start, no end) → current=true", () => {
     const p = positionFromRow(`"Acme","Engineer","","","Jan 2024",""`);
@@ -51,26 +51,43 @@ describe("v0.4.3: parsePositions — `current` requires startRaw, not just absen
     expect(p.endDate).toBe("2023-12-01");
   });
 
-  test("the bug case — title + description but NO Started On AND NO Finished On → current=false (was true)", () => {
-    const p = positionFromRow(
-      `"Local Volunteers","Volunteer","Helped on Saturdays","",""`,
+  test("v0.4.15: the original bug case — title + description but NO Started On AND NO Finished On → DROPPED entirely", () => {
+    // v0.4.3 kept this row as current=false. v0.4.15 drops it because
+    // positionIdFromParts hashes (person, company, startDate, title) and
+    // a null startDate makes two undated Volunteer rows at the same
+    // (person, company, title) collide on identity; writePositions' UPSERT
+    // then silently merges them by overwriting endDate/current.
+    expect(parse(`"Local Volunteers","Volunteer","Helped on Saturdays","",""`)).toEqual([]);
+  });
+
+  test("v0.4.15: anomalous row — no start but has end → DROPPED (was current=false)", () => {
+    expect(parse(`"Acme","Engineer","","","","Dec 2023"`)).toEqual([]);
+  });
+
+  test("v0.4.15: whitespace-only Started On → DROPPED (was current=false)", () => {
+    expect(parse(`"Acme","Engineer","","","   ",""`)).toEqual([]);
+  });
+
+  test("v0.4.15: two undated rows at same (company, title) — both dropped, no hash collision possible downstream", () => {
+    // Pre-fix: both rows passed through parsePositions and writePositions
+    // tried to insert two rows with identical positionIdFromParts hash.
+    // Post-v0.4.6 UPSERT, the second silently overwrote the first's mutable
+    // fields. Post-v0.4.15, parse drops both — writePositions never sees them.
+    const positions = parse(
+      `"Acme","Board Member","First term","","",""\n` +
+        `"Acme","Board Member","Second term","","",""`,
     );
-    // Pre-fix: `current: !endRaw` ⇒ true (the bug). Post-fix:
-    // `current: Boolean(startRaw) && !endRaw` ⇒ false.
-    expect(p.current).toBe(false);
-    expect(p.startDate).toBeNull();
-    expect(p.endDate).toBeNull();
+    expect(positions).toEqual([]);
   });
 
-  test("anomalous row — no start but has end → current=false (unchanged)", () => {
-    const p = positionFromRow(`"Acme","Engineer","","","","Dec 2023"`);
-    expect(p.current).toBe(false);
-  });
-
-  test("whitespace-only Started On is treated as absent → current=false", () => {
-    const p = positionFromRow(`"Acme","Engineer","","","   ",""`);
-    expect(p.current).toBe(false);
-    expect(p.startDate).toBeNull();
+  test("v0.4.15: a dated row alongside an undated row — dated kept, undated dropped", () => {
+    const positions = parse(
+      `"Acme","Engineer","","","Jan 2024",""\n` +
+        `"Local Volunteers","Volunteer","Helped","","",""`,
+    );
+    expect(positions).toHaveLength(1);
+    expect(positions[0]!.companyName).toBe("Acme");
+    expect(positions[0]!.startDate).toBe("2024-01-01");
   });
 });
 

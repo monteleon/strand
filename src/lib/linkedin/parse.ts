@@ -221,9 +221,22 @@ function parseConnections(text: string): LinkedInConnection[] {
 
 // Exported for unit testing — runtime ingest path goes through
 // parseLinkedInExport, which is the only other caller.
+//
+// v0.4.15 (review-#3): rows with no Started On are dropped at parse, not
+// persisted with current=false. positionIdFromParts hashes
+// `${personId}|${companyId}|${startDate ?? "?"}|${title ?? "?"}` so two
+// undated rows at the same (person, company, title) hash identically;
+// post-v0.4.6 writePositions UPSERTs on conflict, which silently merges
+// two distinct positions into one by overwriting endDate/current. The
+// v0.4.3 current-flag fix was orthogonal — it kept the position out of
+// the bothCurrent pool but did nothing about the hash collision.
+// Dropping at parse eliminates the class: no insert, no UPSERT, no merge.
+// Positions without a start date also can't participate in overlap math,
+// so they contribute zero signal to the derived-edges graph.
 export function parsePositions(text: string): LinkedInPosition[] {
   const { headers, rows } = readCsv(text, "Company Name");
-  return rows.map((row) => {
+  const positions: LinkedInPosition[] = [];
+  for (const row of rows) {
     const companyName = col(headers, row, "Company Name").trim();
     const title = col(headers, row, "Title").trim();
     const description = col(headers, row, "Description").trim();
@@ -232,25 +245,22 @@ export function parsePositions(text: string): LinkedInPosition[] {
     const endRaw = col(headers, row, "Finished On").trim();
     const startDate = parsePositionDate(startRaw);
     const endDate = parsePositionDate(endRaw);
-    return {
+    // Drop undated rows. See note above the function.
+    if (startDate === null) continue;
+    positions.push({
       companyName,
       title: title || null,
       description: description || null,
       location: location || null,
       startDate,
       endDate,
-      // v0.4.3: a position is "current" only when there's a known start AND no
-      // finish. Pre-fix `current: !endRaw` flipped to true for undated rows
-      // (e.g. a Volunteer entry with title + description but neither Started
-      // On nor Finished On) — those rows then got persisted with current=true
-      // and joined the derived "currently together" pool, inflating
-      // shared_employer_currently confidence (0.5 → 0.7 when paired with a
-      // declared current position at the same company). "Current since when?"
-      // is unanswerable without a start date, so undated rows are now
-      // current=false.
+      // "Current" means start is known AND no finish. With startDate
+      // guaranteed non-null by the drop above, this collapses to !endRaw,
+      // but kept explicit so the invariant is readable.
       current: Boolean(startRaw) && !endRaw,
-    };
-  });
+    });
+  }
+  return positions;
 }
 
 // Canonicalise a LinkedIn profile URL for join-key parity with people.linkedin_url.
