@@ -35,6 +35,11 @@ export type DerivedPairAtCompany = {
 // All derived edges incident to one person. Ordered by confidence desc, then
 // overlap-months desc. The companyName comes from the evidence JSON — we keep
 // the evidence column as the system of record for the why-behind-the-edge.
+// Returns one row per (other-person, kind): a colleague sharing multiple
+// employers under the same kind (post-0005 company_id in PK can land N rows)
+// collapses to the strongest signal — highest confidence, then longest
+// overlap. Restores the pre-0005 one-row-per-pair UX without losing the
+// other companies in storage.
 export async function listDerivedEdgesForPerson(
   personId: string,
   tenantId: string = LOCAL_TENANT_ID,
@@ -50,20 +55,33 @@ export async function listDerivedEdgesForPerson(
     overlap_months: number;
     both_current: number;
   }>(sql`
-    SELECT
-      CASE WHEN e.person_a = ${personId} THEN e.person_b ELSE e.person_a END AS other_id,
-      p.full_name AS other_name,
-      e.kind,
-      e.confidence,
-      json_extract(e.evidence_json, '$.companyId') AS company_id,
-      json_extract(e.evidence_json, '$.companyName') AS company_name,
-      CAST(json_extract(e.evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months,
-      json_extract(e.evidence_json, '$.bothCurrent') AS both_current
-    FROM derived_edges e
-    JOIN people p ON p.id = (CASE WHEN e.person_a = ${personId} THEN e.person_b ELSE e.person_a END)
-    WHERE e.tenant_id = ${tenantId}
-      AND (e.person_a = ${personId} OR e.person_b = ${personId})
-    ORDER BY e.confidence DESC, overlap_months DESC, p.full_name ASC
+    SELECT other_id, other_name, kind, confidence, company_id, company_name,
+           overlap_months, both_current
+    FROM (
+      SELECT
+        CASE WHEN e.person_a = ${personId} THEN e.person_b ELSE e.person_a END AS other_id,
+        p.full_name AS other_name,
+        e.kind,
+        e.confidence,
+        json_extract(e.evidence_json, '$.companyId') AS company_id,
+        json_extract(e.evidence_json, '$.companyName') AS company_name,
+        CAST(json_extract(e.evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months,
+        json_extract(e.evidence_json, '$.bothCurrent') AS both_current,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            CASE WHEN e.person_a = ${personId} THEN e.person_b ELSE e.person_a END,
+            e.kind
+          ORDER BY
+            e.confidence DESC,
+            CAST(json_extract(e.evidence_json, '$.overlapMonths') AS INTEGER) DESC
+        ) AS rn
+      FROM derived_edges e
+      JOIN people p ON p.id = (CASE WHEN e.person_a = ${personId} THEN e.person_b ELSE e.person_a END)
+      WHERE e.tenant_id = ${tenantId}
+        AND (e.person_a = ${personId} OR e.person_b = ${personId})
+    )
+    WHERE rn = 1
+    ORDER BY confidence DESC, overlap_months DESC, other_name ASC
     LIMIT ${limit}
   `);
   return rows.map((r) => ({

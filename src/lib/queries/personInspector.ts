@@ -61,6 +61,11 @@ export async function getPersonInspector(
     LIMIT 1
   `);
 
+  // Derived counts use COUNT(DISTINCT other-person) so a colleague sharing
+  // multiple employers (multiple rows in derived_edges post-0005 company_id
+  // PK) contributes one to the inspector badge, not N. Pair canonicalisation
+  // (person_a < person_b lex) guarantees the CASE expression yields the
+  // colleague's id deterministically.
   const [edgeCounts] = await db.all<{
     manual: number;
     derived_overlap: number;
@@ -71,15 +76,18 @@ export async function getPersonInspector(
       (SELECT COUNT(*) FROM manual_edges
          WHERE tenant_id = ${tenantId}
            AND (person_a = ${id} OR person_b = ${id})) AS manual,
-      (SELECT COUNT(*) FROM derived_edges
+      (SELECT COUNT(DISTINCT CASE WHEN person_a = ${id} THEN person_b ELSE person_a END)
+         FROM derived_edges
          WHERE tenant_id = ${tenantId}
            AND kind = 'shared_employer_overlap'
            AND (person_a = ${id} OR person_b = ${id})) AS derived_overlap,
-      (SELECT COUNT(*) FROM derived_edges
+      (SELECT COUNT(DISTINCT CASE WHEN person_a = ${id} THEN person_b ELSE person_a END)
+         FROM derived_edges
          WHERE tenant_id = ${tenantId}
            AND kind = 'shared_employer_currently'
            AND (person_a = ${id} OR person_b = ${id})) AS derived_currently,
-      (SELECT COUNT(*) FROM derived_edges
+      (SELECT COUNT(DISTINCT CASE WHEN person_a = ${id} THEN person_b ELSE person_a END)
+         FROM derived_edges
          WHERE tenant_id = ${tenantId}
            AND kind = 'shared_employer_no_overlap'
            AND (person_a = ${id} OR person_b = ${id})) AS derived_no_overlap

@@ -428,10 +428,11 @@ export async function assembleNetworkGraph(
           person_b: string;
           kind: string;
           confidence: number;
+          company_id: string;
           company_name: string | null;
           overlap_months: number | null;
         }>(sql`
-    SELECT person_a, person_b, kind, confidence,
+    SELECT person_a, person_b, kind, confidence, company_id,
       json_extract(evidence_json, '$.companyName') AS company_name,
       CAST(json_extract(evidence_json, '$.overlapMonths') AS INTEGER) AS overlap_months
     FROM derived_edges
@@ -460,6 +461,12 @@ export async function assembleNetworkGraph(
     bump(m.personA);
     bump(m.personB);
   }
+  // Degree counts unique colleague pairs, NOT (pair, kind, company) rows.
+  // After 0005 put company_id in derived_edges PK, a single colleague pair
+  // sharing N companies (or appearing under multiple kinds) lands as N rows;
+  // counting each as a degree bump would inflate /graph minDegree and the
+  // node-colour heuristic. Dedup on the canonical pair key.
+  const derivedPairsBumped = new Set<string>();
   for (const d of derivedEdgesRows) {
     const k: GraphEdgeKind =
       d.kind === "shared_employer_overlap"
@@ -468,7 +475,7 @@ export async function assembleNetworkGraph(
           ? "derived_currently"
           : "derived_no_overlap";
     edges.push({
-      id: `d:${d.person_a}:${d.person_b}:${d.kind}`,
+      id: `d:${d.person_a}:${d.person_b}:${d.kind}:${d.company_id}`,
       source: d.person_a,
       target: d.person_b,
       kind: k,
@@ -477,8 +484,12 @@ export async function assembleNetworkGraph(
       overlapMonths: d.overlap_months ?? null,
       note: null,
     });
-    bump(d.person_a);
-    bump(d.person_b);
+    const pairKey = `${d.person_a}|${d.person_b}`;
+    if (!derivedPairsBumped.has(pairKey)) {
+      bump(d.person_a);
+      bump(d.person_b);
+      derivedPairsBumped.add(pairKey);
+    }
   }
 
   // Cap derived edges at EDGE_CAP by confidence (descending). Manual edges
@@ -493,11 +504,23 @@ export async function assembleNetworkGraph(
       .sort((a, b) => b.confidence - a.confidence)
       .slice(0, EDGE_CAP);
     // Rebuild degree against the surviving edges so nodes and the
-    // (about-to-run) min-degree filter agree on degree.
+    // (about-to-run) min-degree filter agree on degree. Manual edges each
+    // count once; derived edges dedup per (source, target) pair across
+    // kinds and companies — same contract as the initial bump loop.
     degree.clear();
+    const derivedBumpedPostCap = new Set<string>();
     for (const e of cappedEdges) {
-      degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
-      degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+      if (e.kind === "manual") {
+        degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+        degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+      } else {
+        const pairKey = `${e.source}|${e.target}`;
+        if (!derivedBumpedPostCap.has(pairKey)) {
+          degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+          degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+          derivedBumpedPostCap.add(pairKey);
+        }
+      }
     }
   }
 
