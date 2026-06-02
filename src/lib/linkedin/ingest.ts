@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { parseLinkedInExport, type ParsedExport } from "./parse";
-import { deriveSharedEmployerEdges } from "@/lib/derived/edges";
+import { deriveSharedEmployerEdges, runDeriveSerialized } from "@/lib/derived/edges";
 
 export type IngestMessageStats = {
   parsed: number;
@@ -114,8 +114,11 @@ export async function ingestLinkedInExport(
   await writeSynthesisedConnectionPositions(parsed, tenantId);
 
   // Derive shared-employer edges from the fresh positions. Idempotent
-  // (clear-then-rebuild) so cheap on every ingest. ISC-90.
-  await deriveSharedEmployerEdges(tenantId, now);
+  // (clear-then-rebuild) so cheap on every ingest. ISC-90. Goes through
+  // runDeriveSerialized so a concurrent POST /api/derive (stale tab, repair
+  // script, etc.) is serialised — two clear-then-rebuild passes interleaving
+  // would corrupt the derived_edges table.
+  await runDeriveSerialized(() => deriveSharedEmployerEdges(tenantId, now));
 
   // v0.3.0-A: ingest messages last — depends on owner backfill + writePeople
   // having populated all 1st-degree person rows.

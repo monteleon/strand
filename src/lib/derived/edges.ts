@@ -22,6 +22,42 @@
 import { and, eq, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 
+// Module-singleton mutex around deriveSharedEmployerEdges. The deriver does
+// clear-then-rebuild against derived_edges; two simultaneous passes can
+// interleave their DELETE/INSERT statements and leave the table half-
+// populated. The lock lives HERE (not at the route handler) so every
+// caller — POST /api/derive AND the implicit derive at the end of ingest —
+// goes through the same gate. Prior to this, the route's gate was bypassed
+// by src/lib/linkedin/ingest.ts calling deriveSharedEmployerEdges directly.
+//
+// Semantics: queue-of-N. A call arriving while another is in flight waits
+// its turn (chains onto the prior promise) and then runs a fresh pass —
+// ingest after an upload MUST run derive against the freshly-committed
+// positions, so 409-style fail-fast would be wrong for ingest. The route
+// handler still wants 409 for retry-storm protection; it can see the
+// in-flight state via isDeriveInFlight() and reject before queuing.
+let deriveChain: Promise<unknown> = Promise.resolve();
+let deriveInFlightCount = 0;
+
+export function isDeriveInFlight(): boolean {
+  return deriveInFlightCount > 0;
+}
+
+export function runDeriveSerialized<T>(work: () => Promise<T>): Promise<T> {
+  deriveInFlightCount++;
+  const next = deriveChain.catch(() => undefined).then(work);
+  // Swallow rejections on the chain so a failed derive doesn't poison
+  // future calls; each new caller still observes its own work's outcome
+  // via the `next` promise they're returned.
+  deriveChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next.finally(() => {
+    deriveInFlightCount--;
+  });
+}
+
 // Three honest kinds:
 //   shared_employer_overlap   — real overlap math, ≥1 month of co-employment
 //                               proven by date intervals (high evidence)

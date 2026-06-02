@@ -1,39 +1,36 @@
 import { NextResponse } from "next/server";
-import { deriveSharedEmployerEdges, countDerivedEdges } from "@/lib/derived/edges";
+import {
+  countDerivedEdges,
+  deriveSharedEmployerEdges,
+  isDeriveInFlight,
+  runDeriveSerialized,
+} from "@/lib/derived/edges";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Single-flight gate. deriveSharedEmployerEdges holds the SQLite writer for
-// the duration of the pass (clear-then-rebuild of derived_edges across the
-// tenant). The route had no concurrency control: a loop of POSTs — a stale
-// tab retrying, a same-origin CSRF, an accidental for-loop in the terminal
-// — would queue N full re-derives behind the writer, starving every UI
-// fetch until they drained. The fix is to admit one derive at a time and
-// reject the rest with 409. The in-flight Promise is module-level so it
-// survives across requests within a single Node process; on restart it
-// resets, which is fine — there's no derive across processes to coordinate.
-let inFlight: Promise<{
-  result: Awaited<ReturnType<typeof deriveSharedEmployerEdges>>;
-  byKindInDb: Awaited<ReturnType<typeof countDerivedEdges>>;
-}> | null = null;
-
+// The single-flight lock lives in @/lib/derived/edges so the implicit derive
+// at the end of ingest (src/lib/linkedin/ingest.ts) goes through the same
+// gate. The route's job is just to (a) reject fail-fast with 409 if the
+// lock is already held — protecting against UI retry storms — and (b) wrap
+// the derive in JSON error reporting so a throw never becomes Next's
+// default HTML 500 page.
 export async function POST() {
-  if (inFlight) {
-    return NextResponse.json(
-      { error: "derive_in_progress" },
-      { status: 409 },
-    );
+  if (isDeriveInFlight()) {
+    return NextResponse.json({ error: "derive_in_progress" }, { status: 409 });
   }
-  inFlight = (async () => {
-    const result = await deriveSharedEmployerEdges();
-    const byKindInDb = await countDerivedEdges();
-    return { result, byKindInDb };
-  })();
   try {
-    const { result, byKindInDb } = await inFlight;
+    const { result, byKindInDb } = await runDeriveSerialized(async () => {
+      const result = await deriveSharedEmployerEdges();
+      const byKindInDb = await countDerivedEdges();
+      return { result, byKindInDb };
+    });
     return NextResponse.json({ ...result, byKindInDb }, { status: 200 });
-  } finally {
-    inFlight = null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: "derive_failed", detail: message },
+      { status: 500 },
+    );
   }
 }
