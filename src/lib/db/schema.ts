@@ -221,12 +221,27 @@ export const derivedEdges = sqliteTable(
     personB: text("person_b")
       .notNull()
       .references(() => people.id, { onDelete: "cascade" }),
+    // v0.4.21 (review-#9): `connection_date_cluster` removed. The 0005
+    // migration added company_id NOT NULL to this table, and any future
+    // producer of a date-cluster kind would by definition not have a
+    // single companyId (the inference is cross-employer). The enum value
+    // was never emitted by any code path, so the type narrowing is
+    // backward-compatible. If we later need a date-cluster kind, the
+    // schema requires either making company_id nullable (would re-open
+    // audit-#3's PK collision class) or representing date clusters in
+    // a separate table — both deliberate decisions, not silent drift.
+    //
+    // Migration policy note for future destructive migrations: the
+    // 0005 backfill silently dropped any pre-existing row whose evidence
+    // lacked a companyId (only `shared_employer_*` rows survived).
+    // Future migrations that may delete rows should COUNT and surface
+    // the loss (echo or audit table), not just drop in a SELECT WHERE
+    // filter.
     kind: text("kind", {
       enum: [
         "shared_employer_overlap",
         "shared_employer_currently",
         "shared_employer_no_overlap",
-        "connection_date_cluster",
       ],
     }).notNull(),
     companyId: text("company_id")
