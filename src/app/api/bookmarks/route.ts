@@ -20,8 +20,17 @@ async function parseBody(request: Request): Promise<CreateBody | null> {
 
 export async function GET() {
   const rows = await listSavedQueries();
+  // v0.4.16 (review-#4): re-validate every stored URL on read. POST has
+  // hardened input validation since v0.4.9 (isLocalAppPath), but rows
+  // persisted by older versions or written via direct DB access can hold
+  // malicious URLs (`//evil.com`, `/\evil.com`, `javascript:`, etc.).
+  // command-palette renders bookmark URLs into router.push() on click,
+  // so an unfiltered GET path lets pre-hardening rows execute off-origin
+  // navigation. Filter at read so the hardening covers both write AND
+  // read paths; the bad rows linger in storage but never surface.
+  const safe = rows.filter((r) => isLocalAppPath(r.url));
   return NextResponse.json(
-    { results: rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })) },
+    { results: safe.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })) },
     { status: 200 },
   );
 }
