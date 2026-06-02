@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { fetchResults } from "@/lib/fetch-results";
 
 type Candidate = { id: string; fullName: string; headline: string | null };
 
@@ -22,15 +23,25 @@ export function PersonPicker({
       setCandidates([]);
       return;
     }
+    // v0.4.19 (review-#7): adopt fetchResults so a 5xx / error-envelope
+    // response can't crash this typeahead (setCandidates(undefined) →
+    // candidates.length TypeError). The cancelled guard is required
+    // because fetchResults swallows AbortError into [] — without it, a
+    // stale aborted request's .then(setCandidates([])) could land after
+    // the newer request's setCandidates(real), clobbering the dropdown.
+    let cancelled = false;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    fetch(`/api/people/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
-      .then((r) => r.json())
-      .then((data: { results: Candidate[] }) => setCandidates(data.results))
-      .catch(() => {
-        /* aborted — fine */
-      });
+    fetchResults<Candidate>(
+      `/api/people/search?q=${encodeURIComponent(q)}`,
+      { signal: ctrl.signal },
+    ).then((rs) => {
+      if (!cancelled) setCandidates(rs);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [q]);
 
   return (
