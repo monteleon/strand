@@ -2,21 +2,25 @@
 
 > Your professional network, your data. Self-hostable. Local-first.
 
+![Network graph view](docs/screenshots/06-graph.png)
+
 Strand ingests your LinkedIn data export and lets you query your professional
 network — who you know at X, who has worked with whom, who is closest to
 person Y, what your network looks like as a graph — without anything leaving
 your machine.
 
-**Status:** v0.1.0 — every feature week (W1–W7) shipped. **License:** MIT.
-
-![Network graph view](docs/screenshots/06-graph.png)
-
-## Why this exists
-
-LinkedIn lets you see your network through its UI, on its terms. Strand is the
-opposite posture: your network sits in one SQLite file on your machine, and
-you query it however you like — through the web UI, through saved query
+LinkedIn lets you see your network through its UI, on its terms. Strand is
+the opposite posture: your network sits in one SQLite file on your machine,
+and you query it however you like — through the web UI, through saved query
 bookmarks, or by opening the file in any SQLite tool.
+
+**Status:** v0.4.22 — every feature week shipped + four post-release arcs:
+interactive `/graph` filters (v0.2.0), `messages.csv` ingest + warm-path
+ranking (v0.3.x), graph controls (v0.4.0), and a 10-finding correctness +
+security audit sweep (v0.4.13–v0.4.22). **License:** MIT.
+
+**Stable surface:** ~240 unit tests + 70+ Playwright assertions across
+`/upload`, `/profile`, `/people`, `/companies`, `/queries/*`, `/graph`.
 
 ## The load-bearing constraint
 
@@ -52,7 +56,7 @@ query and every UI section.
 Prereqs: [Bun](https://bun.sh) ≥ 1.3.
 
 ```bash
-git clone <repo-url> strand
+git clone https://github.com/monteleon/strand
 cd strand
 bun install
 bun run db:migrate     # creates data/strand.db
@@ -200,6 +204,16 @@ not a rewrite.
 | W5 | Query | ✅ Shipped — `/queries/at-company`, `worked-with`, `by-year`, `reach` + saved bookmarks. |
 | W6 | Visualise | ✅ Shipped — Cytoscape force-directed graph at `/graph`. |
 | W7 | Polish & ship | ✅ Shipped — README, screenshots, Docker, CONTRIBUTING, v0.1.0. |
+
+### Beyond v0.1.0
+
+| Ver | Goal | Notes |
+| --- | --- | --- |
+| v0.2.0 | Interactive `/graph` filters | Edge cap, kinds, confidence slider, min-degree filter, per-route loading. |
+| v0.3.0 | `messages.csv` ingest + warm-path ranking | Message counts feed a `sort=warmth` mode on `/queries/reach/[id]` (warmth = `sent + received`, mutuality = `min(sent, received)`). Three independent epistemic signals: edge confidence, message warmth, message mutuality. |
+| v0.3.4 | Graph query perf | Candidates UNION-ALL 4× collapsed to CROSS JOIN unpivot 2×; correlated employer subquery rewritten with window function. ~30–40% faster on the SQL axis. |
+| v0.4.0 | Graph filter controls | Cap dropdown, company picker, scope toggle (current / ever). All controls URL-bound so a graph view is a shareable link. |
+| v0.4.13–v0.4.22 | Correctness + security audit sweep | 10 review findings closed across the derived-edges PK cascade, the derive-route single-flight altitude, parser idempotency, bookmarks URL re-validation, ingest size guard, `fetchResults` adoption, and the new `derived_edges.company_id` index. +45 unit tests, zero regressions. |
 
 ## Privacy posture
 
