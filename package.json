@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "check:isolation": "bun run scripts/check-isolation.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/lib/db/migrate.ts",
     "db:studio": "drizzle-kit studio",

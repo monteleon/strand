@@ -51,6 +51,23 @@ either profile" kind of fact. Those land in `manual_edges` with confidence
 implicit = 1.0 and stay rigorously separate from derived edges in every
 query and every UI section.
 
+## Known limitations
+
+These are deliberate v1 deferrals, not bugs — documented so the numbers you see
+are read correctly:
+
+- **Warmth counts don't yet exclude mass channels.** `messages.csv` warmth is a
+  raw `sent + received` tally. Distribution lists, calendar invites, and
+  auto-replies inflate `received`, so a broadcast contact can rank as "warm".
+  A 1-to-many detector is planned post-v1; until then, treat high warmth on
+  obviously-broadcast contacts with suspicion.
+- **Warmth has no time-decay.** A burst of messages five years ago counts the
+  same as a steady thread today, so all-time warmth can overweight stale loops.
+  A decay model is planned post-v1.
+
+Both affect the optional `sort=warmth` / `sort=mutuality` ranking only — the
+edge-confidence and graph features are unaffected.
+
 ## Quick start (Bun)
 
 Prereqs: [Bun](https://bun.sh) ≥ 1.3.

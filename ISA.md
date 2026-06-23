@@ -607,7 +607,7 @@ Pursue: `/graph` gains three new URL-bound filters in the existing panel — nod
 - [x] ISC-397: Annotated tag `v0.4.0` cut + pushed to origin (first minor bump since the warm-path arc).
 - [x] ISC-398: Anti regression: default `/graph` URL (no params) renders byte-identical node and edge sets to v0.3.4. Verified by comparing assembled-graph output before/after.
 - [x] ISC-399: Anti: existing `kinds=`, `minConfidence=`, `minDegree=` filters work identically — no parameter name collisions or precedence regressions.
-- [ ] ISC-400: Advisor fires at commitment-boundary. Particular focus: (a) `scope=ever` semantics — should the "EXISTS any position" check be tenant-scoped (it must); (b) composition ordering correctness when company filter excludes the owner; (c) cap=1 edge case (owner-only).
+- [x] ISC-400: Advisor fires at commitment-boundary. Particular focus: (a) `scope=ever` semantics — should the "EXISTS any position" check be tenant-scoped (it must); (b) composition ordering correctness when company filter excludes the owner; (c) cap=1 edge case (owner-only). [Marked done 2026-06-23 — the work shipped pre-tag (see ISC-400 evidence below: cap UI/server mismatch + LIKE-wildcard escape patched); the checkbox was simply never flipped.]
 
 ## Test Strategy
 
@@ -1093,4 +1093,4 @@ Pursue: `/graph` gains three new URL-bound filters in the existing panel — nod
 - ISC-429 (Anti: no migration / read-side only): `git diff src/lib/db/schema.ts` empty; companies.ts contains only `db.all(sql\`SELECT…\`)` reads.
 - ISC-430: `bun run typecheck` exit 0; new test file 8 pass / 0 fail / 27 expect(); full `bun test` suite **94 pass / 0 fail / 3801 expect() across 7 files** (was 86 pass / 6 files at v0.4.1 — +8 tests, +1 file; 219s).
 - ISC-431 (Anti-regression): `/people` next-href = `/people?page=2`, `/companies` next-href = `/companies?page=2` — no `company`/`status` param leak from the `PageNav` extension; both still render 50 items + page-nav.
-- ISC release/tag: **DEFERRED** — work verified but not committed/tagged pending Matt's go-ahead (v0.4.2 was burned by the reverted hero attempt; next tag number is Matt's call).
+- ISC release/tag: **SHIPPED v0.4.3** (commit `67bf520` "at-company-pagination: v0.4.3 — paginate /queries/at-company (audit-A)"). [Bookkeeping corrected 2026-06-23 — this line previously read DEFERRED, but git confirms the slice was committed and tagged.]

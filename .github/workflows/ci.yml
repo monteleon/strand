@@ -1,0 +1,34 @@
+name: CI
+
+# Runs on every push and pull request — including forks. The job below is
+# deliberately secret-free: it scans source text only (no LinkedIn data, no
+# database, no credentials, no dependency install), so a fork's first PR shows
+# green without any configuration.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Scope (deliberate, MVP): this pipeline gates the privacy-isolation boundary
+# only. `bun run build`, `tsc --noEmit`, and the test suite are NOT gated here —
+# they need `bun install` (deps), which trades the dependency-free fork-safety
+# of this job for broader coverage. Add a second job for those if/when desired.
+jobs:
+  isolation:
+    name: messages-category isolation (privacy boundary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # check-isolation.ts uses GNU grep (present on ubuntu-latest) and only
+      # node:child_process / node:process — no third-party deps, so we skip
+      # `bun install` entirely. It enforces the three-layer boundary that keeps
+      # the `messages` epistemic category isolated (ISC-265 JS-import,
+      # ISC-289 SQL-keyword, ISC-301 ORM-symbol). Exit 0 = clean, 1 = violation.
+      - name: Isolation probes (ISC-265 / 289 / 301)
+        run: bun run scripts/check-isolation.ts
