@@ -10,8 +10,8 @@ build/
 dist/
 
 # Bun
-bun.lockb
-bun.lock
+bun.lockb          # legacy binary lockfile — not used
+# bun.lock IS committed (text format) for reproducible installs + frozen CI
 
 # Env
 .env
