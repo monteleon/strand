@@ -1,4 +1,4 @@
-import { and, eq, like, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { escapeLikePattern } from "@/lib/db/like";
 import { PAGE_SIZE, pageWindow, type PageParams } from "@/lib/pagination";
@@ -235,10 +235,6 @@ export async function searchPeople(
     .orderBy(schema.people.fullName)
     .limit(limit);
 }
-
-// LIKE expression matcher used for /companies — alias re-exported here so the
-// companies query module can use the same parameterised-substring pattern.
-export const likeIgnoreCase = (q: string) => like(sql`lower(x)`, `%${q}%`);
 
 // W5b — connections-by-year histogram. Owner is excluded. NULL connected_at
 // is bucketed under "unknown". substr(connected_at, 1, 4) is safe because

@@ -139,9 +139,11 @@ describe("/api/derive — single-flight via shared lock (finding #13 + review-#2
     pendingRejector!(new Error("SQLITE_BUSY: database is locked"));
     const res = await inflight;
     expect(res.status).toBe(500);
-    const body = (await res.json()) as { error: string; detail: string };
+    const body = (await res.json()) as { error: string; detail?: string };
     expect(body.error).toBe("derive_failed");
-    expect(body.detail).toContain("SQLITE_BUSY");
+    // Security: internal error text (SQL, paths, stack) must NOT leak to the
+    // client — it's logged server-side instead. The response is a bare code.
+    expect(body.detail).toBeUndefined();
 
     // Lock must release on throw so the next POST isn't stuck at 409 forever.
     expect(lockInFlight).toBe(false);

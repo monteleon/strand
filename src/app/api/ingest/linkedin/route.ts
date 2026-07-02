@@ -82,14 +82,19 @@ export async function POST(request: Request): Promise<Response> {
     result = await ingestLinkedInExport(buffer, file.name);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // "missing from export" is a controlled, user-actionable message about
+    // which required CSV is absent — safe (and useful) to surface.
     if (message.includes("missing from export")) {
       return NextResponse.json(
         { error: "linkedin_export_missing_files", detail: message },
         { status: 400 },
       );
     }
+    // Everything else may carry internal detail (paths, SQL, parser state).
+    // Log server-side, return a generic error to the client.
+    console.error("[ingest] failed:", err);
     return NextResponse.json(
-      { error: "ingest_failed", detail: message },
+      { error: "ingest_failed" },
       { status: 500 },
     );
   }

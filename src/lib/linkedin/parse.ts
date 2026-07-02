@@ -366,8 +366,46 @@ async function readZipFile(zip: JSZip, name: string): Promise<string> {
   return file.async("string");
 }
 
+// Total decompressed budget across all entries. The route already caps the
+// *compressed* upload at 50 MB, but DEFLATE routinely hits 1000:1 on
+// repetitive data — a 50 MB zip of zeros expands to ~50 GB and OOMs the
+// worker before any per-file guard fires. JSZip reads uncompressed sizes from
+// the central directory at loadAsync (no decompression yet), so we can reject
+// a bomb before materialising a single byte. 200 MB leaves generous headroom
+// for the heaviest real export (messages.csv can reach tens of MB) while
+// making an expansion attack impossible.
+const MAX_DECOMPRESSED_BYTES = 200 * 1024 * 1024;
+
+// `_data.uncompressedSize` is populated from the zip central directory by
+// loadAsync — it is JSZip-internal but stable across the 3.x line and is the
+// only pre-decompression size signal available. Guarded read so a shape change
+// degrades to a thrown error, never a silent bypass.
+function declaredUncompressedSize(file: JSZip.JSZipObject): number {
+  const size = (file as unknown as { _data?: { uncompressedSize?: number } })
+    ._data?.uncompressedSize;
+  return typeof size === "number" && Number.isFinite(size) && size >= 0
+    ? size
+    : Number.POSITIVE_INFINITY;
+}
+
+function assertNoZipBomb(zip: JSZip): void {
+  let total = 0;
+  for (const name of Object.keys(zip.files)) {
+    const entry = zip.files[name];
+    if (entry.dir) continue;
+    total += declaredUncompressedSize(entry);
+    if (total > MAX_DECOMPRESSED_BYTES) {
+      throw new Error(
+        `Export decompresses to more than ${MAX_DECOMPRESSED_BYTES} bytes; refusing to expand (possible zip bomb).`,
+      );
+    }
+  }
+}
+
 export async function parseLinkedInExport(zipBytes: ArrayBuffer | Uint8Array | Buffer): Promise<ParsedExport> {
   const zip = await JSZip.loadAsync(zipBytes);
+  // Reject decompression bombs before any entry is expanded into memory.
+  assertNoZipBomb(zip);
   const [profileCsv, connectionsCsv, positionsCsv] = await Promise.all([
     readZipFile(zip, "Profile.csv"),
     readZipFile(zip, "Connections.csv"),

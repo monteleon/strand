@@ -27,9 +27,11 @@ export async function POST() {
     });
     return NextResponse.json({ ...result, byKindInDb }, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Log the real error server-side; don't leak internal messages (paths,
+    // SQL, stack text) to the client.
+    console.error("[derive] failed:", err);
     return NextResponse.json(
-      { error: "derive_failed", detail: message },
+      { error: "derive_failed" },
       { status: 500 },
     );
   }
