@@ -1,5 +1,7 @@
 # Security Audit — 2026-07-02
 
+> **Status: CLOSED — RESOLVED (2026-07-02).** All 6 findings remediated: 5 FIXED, 1 (#2) MITIGATED by #1. Fixes shipped in `04f7edf`; report merged in #1. Verified — see [Verification](#verification). No findings outstanding.
+
 **Scope:** Full request surface — 8 API routes, DB/query layer, LinkedIn ingest/parse, Next config, Dockerfile, git hygiene, dependencies.
 **Stack:** Next.js 14.2.35, Bun, SQLite/Drizzle. Local-first, single-tenant, **no authentication by design** (the SQLite file on disk is the access boundary).
 
