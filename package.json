@@ -1,6 +1,6 @@
 {
   "name": "strand",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "private": true,
   "description": "Self-hostable web app that ingests your LinkedIn data export and lets you query your professional network.",
   "license": "MIT",
