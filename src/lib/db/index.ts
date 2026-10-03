@@ -24,9 +24,14 @@ const client = createClient({ url: `file:${dbPath}` });
 // is persistent in the DB file, so this converts existing databases on first
 // start. The libsql file client executes synchronously up to its first await,
 // so the pragma has run before any query below can be issued.
-client.execute("PRAGMA journal_mode = WAL").catch((err) => {
-  console.error("[db] could not enable WAL journal mode:", err);
-});
+// Skipped during `next build`: its parallel page-data workers all import this
+// module and would race each other converting the same file ("database is
+// locked"). The build never needs the DB; `next start` and migrate set it.
+if (process.env.NEXT_PHASE !== "phase-production-build") {
+  client.execute("PRAGMA journal_mode = WAL").catch((err) => {
+    console.error("[db] could not enable WAL journal mode:", err);
+  });
+}
 
 export const db = drizzle(client, { schema });
 export { schema };

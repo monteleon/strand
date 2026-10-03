@@ -1,5 +1,6 @@
 import nextDynamic from "next/dynamic";
 import Link from "next/link";
+import { Suspense, cache } from "react";
 import { eq } from "drizzle-orm";
 import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
 import { assembleNetworkGraph } from "@/lib/queries/graph";
@@ -14,32 +15,48 @@ const HeroGraph = nextDynamic(
 );
 
 async function getCounts() {
-  const peopleCount = await db.$count(
-    schema.people,
-    eq(schema.people.tenantId, LOCAL_TENANT_ID),
-  );
-  const companiesCount = await db.$count(
-    schema.companies,
-    eq(schema.companies.tenantId, LOCAL_TENANT_ID),
-  );
+  const [peopleCount, companiesCount] = await Promise.all([
+    db.$count(schema.people, eq(schema.people.tenantId, LOCAL_TENANT_ID)),
+    db.$count(schema.companies, eq(schema.companies.tenantId, LOCAL_TENANT_ID)),
+  ]);
   return { peopleCount, companiesCount };
 }
 
+// The hero graph is the slow part of this page (assembleNetworkGraph, ~1s+
+// on a real export). It streams in behind <Suspense> so the title card and
+// counts paint immediately; cache() lets the backdrop and the "in the
+// surfaced graph" figure share one query per request.
+const getHeroGraph = cache(() => assembleNetworkGraph());
+
+async function HeroBackdrop() {
+  const { nodes, edges } = await getHeroGraph();
+  if (nodes.length === 0) return null;
+  return (
+    <>
+      <HeroGraph nodes={nodes} edges={edges} />
+      <div
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-canvas/50 via-canvas/30 to-canvas/70"
+        aria-hidden="true"
+      />
+    </>
+  );
+}
+
+async function SurfacedCount() {
+  const { nodes } = await getHeroGraph();
+  return <span className="text-text-primary">{nodes.length}</span>;
+}
+
 export default async function HomePage() {
-  const { nodes, edges } = await assembleNetworkGraph();
   const { peopleCount, companiesCount } = await getCounts();
   const hasData = peopleCount > 0;
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-canvas text-text-primary">
-      {hasData && nodes.length > 0 && (
-        <>
-          <HeroGraph nodes={nodes} edges={edges} />
-          <div
-            className="pointer-events-none absolute inset-0 bg-gradient-to-br from-canvas/50 via-canvas/30 to-canvas/70"
-            aria-hidden="true"
-          />
-        </>
+      {hasData && (
+        <Suspense fallback={null}>
+          <HeroBackdrop />
+        </Suspense>
       )}
 
       <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-8 py-16">
@@ -63,8 +80,10 @@ export default async function HomePage() {
                 {companiesCount.toLocaleString()}
               </span>{" "}
               companies ·{" "}
-              <span className="text-text-primary">{nodes.length}</span> in the
-              surfaced graph
+              <Suspense fallback={<span className="text-text-tertiary">…</span>}>
+                <SurfacedCount />
+              </Suspense>{" "}
+              in the surfaced graph
             </p>
           ) : (
             <p className="mt-4 text-sm text-text-secondary">

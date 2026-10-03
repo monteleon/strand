@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ALL_GRAPH_KINDS,
@@ -10,6 +10,11 @@ import { CompanyPicker } from "@/components/company-picker";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
 const SLIDER_STEP = 0.05;
+// Sliders commit to the URL only after the value has been still this long.
+// Every URL change is a server round-trip (assembleNetworkGraph + a full
+// cytoscape re-layout), so committing per step turned one drag from 0.70 to
+// 0.30 into 8 rebuilds and 8 history entries.
+const SLIDER_COMMIT_DELAY_MS = 300;
 const DEFAULT_MIN_DEGREE = 1;
 const MAX_MIN_DEGREE = 20;
 // v0.4.0 (ISC-379, ISC-381): cap dropdown snap points + default.
@@ -171,9 +176,21 @@ export function GraphFilters({
   const [companyName, setCompanyName] = useState<string | null>(initialCompanyName);
   const [scope, setScope] = useState<GraphScope>(urlScope);
 
+  // Timer for a debounced slider → URL commit (see applyWhenSettled).
+  const pendingSliderCommit = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (pendingSliderCommit.current) clearTimeout(pendingSliderCommit.current);
+  }, []);
+
   // Keep local state in sync with URL — fires on Back/Forward navigation
   // (App Router updates searchParams on popstate) and on any router.refresh.
   useEffect(() => {
+    // The URL moved under us (Back/Forward): a slider commit still pending
+    // from before would push the old value back over the navigation.
+    if (pendingSliderCommit.current) {
+      clearTimeout(pendingSliderCommit.current);
+      pendingSliderCommit.current = null;
+    }
     setKinds(urlKinds);
     setMinConfidence(urlMinConf);
     setMinDegree(urlMinDeg);
@@ -213,6 +230,13 @@ export function GraphFilters({
       nextCompanyId: string | null,
       nextScope: GraphScope,
     ) => {
+      // An immediate commit supersedes a pending slider commit: the caller
+      // passes the current slider values from state, so the pending one
+      // would only re-push stale values for the other controls.
+      if (pendingSliderCommit.current) {
+        clearTimeout(pendingSliderCommit.current);
+        pendingSliderCommit.current = null;
+      }
       const url = urlFor(
         nextKinds,
         nextMinConf,
@@ -228,6 +252,19 @@ export function GraphFilters({
       }
     },
     [router],
+  );
+
+  // Slider variant of `apply`: local state (and the value label) updates on
+  // every step; the URL commit waits until the slider settles.
+  const applyWhenSettled = useCallback(
+    (...args: Parameters<typeof apply>) => {
+      if (pendingSliderCommit.current) clearTimeout(pendingSliderCommit.current);
+      pendingSliderCommit.current = setTimeout(() => {
+        pendingSliderCommit.current = null;
+        apply(...args);
+      }, SLIDER_COMMIT_DELAY_MS);
+    },
+    [apply],
   );
 
   const toggleKind = useCallback(
@@ -248,9 +285,9 @@ export function GraphFilters({
       const next = parseFloat(e.target.value);
       if (!Number.isFinite(next)) return;
       setMinConfidence(next);
-      apply(kinds, next, minDegree, cap, companyId, scope);
+      applyWhenSettled(kinds, next, minDegree, cap, companyId, scope);
     },
-    [kinds, minDegree, cap, companyId, scope, apply],
+    [kinds, minDegree, cap, companyId, scope, applyWhenSettled],
   );
 
   const onMinDegreeChange = useCallback(
@@ -259,9 +296,9 @@ export function GraphFilters({
       if (!Number.isFinite(next)) return;
       const clamped = Math.max(1, Math.min(MAX_MIN_DEGREE, next));
       setMinDegree(clamped);
-      apply(kinds, minConfidence, clamped, cap, companyId, scope);
+      applyWhenSettled(kinds, minConfidence, clamped, cap, companyId, scope);
     },
-    [kinds, minConfidence, cap, companyId, scope, apply],
+    [kinds, minConfidence, cap, companyId, scope, applyWhenSettled],
   );
 
   const onCapChange = useCallback(
