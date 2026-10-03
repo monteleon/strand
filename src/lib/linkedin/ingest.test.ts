@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -99,7 +99,8 @@ describe("ingestLinkedInExport — fresh ingest of the synthetic export", () => 
     placeholderCompanies: number;
     personIdShape: string;
   };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();
@@ -259,7 +260,8 @@ describe("ingestLinkedInExport — fresh ingest of the synthetic export", () => 
 describe("ingestLinkedInExport — duplicate detection (ISC-16 shortcut)", () => {
   let first: IngestResult;
   let second: IngestResult;
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();
@@ -315,7 +317,8 @@ describe("writeOwner — rename re-ingest preserves owner id (v0.4.2)", () => {
     ownerHeadline: string | null;
     connectionResolvesToOwner: boolean;
   };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();
@@ -457,7 +460,8 @@ describe("writePositions — endDate corrections land via UPSERT (v0.4.6, /code-
     afterClearedEndDate: { count: number; endDate: string | null; current: boolean };
     afterNoChange: { count: number; endDate: string | null; current: boolean };
   };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();
@@ -577,7 +581,8 @@ describe("v0.4.17 (review-#5): writeCompanies / writePeople / writeConnections U
     connAfterFirst:      { count: number; connectedAt: string | null };
     connAfterCorrect:    { count: number; connectedAt: string | null };
   };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();

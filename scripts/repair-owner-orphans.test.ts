@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -71,7 +71,8 @@ describe("repair-owner-orphans — synthetic orphan state is fully rewritten", (
     strandedRowExists: boolean;
     newOwnerRowExists: boolean;
   };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();

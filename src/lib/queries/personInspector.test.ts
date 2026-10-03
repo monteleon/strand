@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -60,7 +60,8 @@ async function runSubprocessScript<T = unknown>(
 
 describe("getPersonInspector — deterministic tiebreaker on identical position ordering (v0.4.4, /code-review #6)", () => {
   let picked: { companyName: string | null; lexSmallerId: string; lexLargerId: string };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();
@@ -133,7 +134,8 @@ describe("getPersonInspector — single-position trivial cases (regression-safe)
     declaredBeatsSynthesised: string | null;
     laterStartBeatsEarlier: string | null;
   };
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
+  afterAll(() => cleanup?.());
 
   beforeAll(async () => {
     const fresh = await freshDbWithMigrations();
