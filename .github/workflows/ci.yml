@@ -9,10 +9,11 @@ on:
     branches: [main]
   pull_request:
 
-# Scope (deliberate, MVP): two gates — the privacy-isolation boundary (dependency-
-# free, fork-safe by design) and a typecheck. The full test suite and `bun run
-# build` are NOT gated here yet; add them as a further job when wanted. Both jobs
-# below are secret-free (no LinkedIn data, no database, no credentials).
+# Four gates: the privacy-isolation boundary (dependency-free, fork-safe by
+# design), a typecheck, the full test suite and a production build. All jobs are
+# secret-free: no LinkedIn data, no credentials. The test suite seeds a throwaway
+# SQLite DB from the synthetic export (test/fixtures/synthetic-export.ts) via the
+# bunfig.toml preload, so it needs no real export and no data/strand.db.
 jobs:
   isolation:
     name: messages-category isolation (privacy boundary)
@@ -55,3 +56,40 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+  test:
+    name: tests (bun test, synthetic fixture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun test
+
+  build:
+    name: production build (next build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Catches Next-specific breakage tsc misses — e.g. a non-route export
+      # from a route.ts module, which broke `next build` from v0.4.10 to v0.4.23.
+      - name: Build
+        run: bun run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"

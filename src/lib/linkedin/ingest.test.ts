@@ -2,17 +2,17 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { FIXTURE } from "../../../test/fixtures/synthetic-export";
 
 // Subprocess pattern: ingest writes to the DB, and the rest of the test suite
-// runs against the real `data/strand.db`. Running ingest in-process would
-// contaminate that DB. Each test below spawns a fresh subprocess with
+// shares the preload-seeded fixture DB (test/preload.ts). Running ingest
+// in-process would contaminate that DB. Each test below spawns a fresh subprocess with
 // STRAND_DB_PATH pointing at a per-test temp file, migrates it, runs the
 // ingest scenario, prints a result line prefixed with __INGEST_TEST_RESULT__,
 // and exits. The test process only parses and asserts on that line.
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
-const REAL_EXPORT_PATH =
-  "/mnt/c/Users/mca/Downloads/Basic_LinkedInDataExport_05-12-2026.zip.zip";
+const FIXTURE_MODULE = `${REPO_ROOT}/test/fixtures/synthetic-export.ts`;
 const RESULT_MARKER = "__INGEST_TEST_RESULT__";
 
 async function freshDbWithMigrations(): Promise<{ dbPath: string; cleanup: () => void }> {
@@ -88,7 +88,7 @@ type IngestResult = {
   };
 };
 
-describe("ingestLinkedInExport — fresh ingest from real export", () => {
+describe("ingestLinkedInExport — fresh ingest of the synthetic export", () => {
   let result: IngestResult;
   let invariants: {
     ownerExists: boolean;
@@ -110,7 +110,7 @@ describe("ingestLinkedInExport — fresh ingest from real export", () => {
     }>(
       fresh.dbPath,
       `
-        const { readFile } = await import("node:fs/promises");
+        const { buildSyntheticExport } = await import("${FIXTURE_MODULE}");
         const { ingestLinkedInExport } = await import(
           "${REPO_ROOT}/src/lib/linkedin/ingest.ts"
         );
@@ -119,8 +119,8 @@ describe("ingestLinkedInExport — fresh ingest from real export", () => {
         );
         const { eq, sql } = await import("drizzle-orm");
 
-        const bytes = await readFile(${JSON.stringify(REAL_EXPORT_PATH)});
-        const result = await ingestLinkedInExport(Buffer.from(bytes), "real.zip");
+        const bytes = await buildSyntheticExport();
+        const result = await ingestLinkedInExport(bytes, "synthetic.zip");
 
         // Pull durable invariants from the DB we just wrote to.
         const tenants = await db
@@ -195,28 +195,34 @@ describe("ingestLinkedInExport — fresh ingest from real export", () => {
     expect(result.batchId.length).toBeGreaterThan(0);
   });
 
-  test("ISC-403: counts.people > 1500 (owner + real connections)", () => {
-    expect(result.counts.people).toBeGreaterThan(1500);
-    expect(result.counts.people).toBeLessThan(2500);
+  test("ISC-403: counts.people = owner + every connection with a URL", () => {
+    expect(result.counts.people).toBe(FIXTURE.people);
   });
 
-  test("ISC-404: counts.companies > 100 (real export has 1k+ employers)", () => {
-    expect(result.counts.companies).toBeGreaterThan(100);
+  test("ISC-404: counts.companies excludes placeholders ('---', 'n/a') and undated positions", () => {
+    expect(result.counts.companies).toBe(FIXTURE.companies);
   });
 
-  test("ISC-405: counts.positions and counts.connections > 0", () => {
-    expect(result.counts.positions).toBeGreaterThan(0);
-    expect(result.counts.connections).toBeGreaterThan(1500);
+  test("ISC-405: counts.positions and counts.connections exact", () => {
+    expect(result.counts.positions).toBe(
+      FIXTURE.declaredPositions + FIXTURE.synthesisedPositions,
+    );
+    expect(result.counts.connections).toBe(FIXTURE.connections);
   });
 
-  test("ISC-406: counts.messages > 0 (real export has messages.csv)", () => {
-    expect(result.counts.messages).toBeGreaterThan(0);
+  test("ISC-406: counts.messages = inserted (InMail from non-connection skipped)", () => {
+    expect(result.counts.messages).toBe(FIXTURE.messagesInserted);
   });
 
-  test("ISC-407: messageStats defined on fresh ingest with messages.csv", () => {
-    expect(result.messageStats).toBeDefined();
-    expect(result.messageStats!.inserted).toBeGreaterThan(0);
-    expect(result.messageStats!.inserted).toBe(result.counts.messages);
+  test("ISC-407: messageStats exact on fresh ingest with messages.csv", () => {
+    expect(result.messageStats).toEqual({
+      parsed: FIXTURE.messageRows,
+      expanded: FIXTURE.messagesExpanded,
+      skipped_no_url: FIXTURE.messagesSkippedNoUrl,
+      skipped_no_date: FIXTURE.messagesSkippedNoDate,
+      skipped_no_person: FIXTURE.messagesSkippedNoPerson,
+      inserted: FIXTURE.messagesInserted,
+    });
   });
 
   // --- durable invariants in the DB (ISC-408..414) ---
@@ -233,12 +239,12 @@ describe("ingestLinkedInExport — fresh ingest from real export", () => {
     expect(invariants.ownerInToPersonId).toBe(0);
   });
 
-  test("ISC-411: at least one declared position exists (from Positions.csv)", () => {
-    expect(invariants.declaredPositions).toBeGreaterThan(0);
+  test("ISC-411: declared positions = dated Positions.csv rows", () => {
+    expect(invariants.declaredPositions).toBe(FIXTURE.declaredPositions);
   });
 
-  test("ISC-412: synthesised positions exist (from Connections.csv company text)", () => {
-    expect(invariants.synthesisedPositions).toBeGreaterThan(0);
+  test("ISC-412: synthesised positions = connections with URL + real company", () => {
+    expect(invariants.synthesisedPositions).toBe(FIXTURE.synthesisedPositions);
   });
 
   test("ISC-413: placeholder companies are filtered (no rows with '---', 'n/a', etc.)", () => {
@@ -264,13 +270,13 @@ describe("ingestLinkedInExport — duplicate detection (ISC-16 shortcut)", () =>
     }>(
       fresh.dbPath,
       `
-        const { readFile } = await import("node:fs/promises");
+        const { buildSyntheticExport } = await import("${FIXTURE_MODULE}");
         const { ingestLinkedInExport } = await import(
           "${REPO_ROOT}/src/lib/linkedin/ingest.ts"
         );
-        const bytes = await readFile(${JSON.stringify(REAL_EXPORT_PATH)});
-        const first = await ingestLinkedInExport(Buffer.from(bytes), "real.zip");
-        const second = await ingestLinkedInExport(Buffer.from(bytes), "real.zip");
+        const bytes = await buildSyntheticExport();
+        const first = await ingestLinkedInExport(bytes, "synthetic.zip");
+        const second = await ingestLinkedInExport(bytes, "synthetic.zip");
         console.log("${RESULT_MARKER}" + JSON.stringify({ first, second }));
       `,
     );

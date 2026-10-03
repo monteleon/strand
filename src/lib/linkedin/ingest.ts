@@ -201,7 +201,9 @@ export async function writeOwner(
 
 // Treat placeholders like "---", "n/a", "—" as missing rather than companies.
 function isPlaceholderCompany(normalized: string): boolean {
-  return !/[a-z0-9]/.test(normalized);
+  // "n/a" carries letters, so the punctuation-only test alone let it through
+  // as a real company (caught by the synthetic test fixture, v0.4.25).
+  return !/[a-z0-9]/.test(normalized) || normalized === "n/a";
 }
 
 export async function writeCompanies(parsed: ParsedExport, tenantId: string) {

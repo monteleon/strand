@@ -1,0 +1,3 @@
+[test]
+# Seeds a temp DB from the synthetic LinkedIn export before any test loads.
+preload = ["./test/preload.ts"]

@@ -8,9 +8,11 @@ import {
   parsePositionDate,
   parsePositions,
 } from "./parse";
+import { buildSyntheticExport, FIXTURE } from "../../../test/fixtures/synthetic-export";
 
-const REAL_EXPORT_PATH =
-  "/mnt/c/Users/mca/Downloads/Basic_LinkedInDataExport_05-12-2026.zip.zip";
+// Opt-in: point at a real LinkedIn export zip to also run the real-data
+// round-trip (e.g. STRAND_REAL_EXPORT=~/Downloads/Basic_LinkedInDataExport.zip).
+const REAL_EXPORT_PATH = process.env.STRAND_REAL_EXPORT;
 
 describe("date parsers", () => {
   test("ISC-3: connection date '06 May 2026' → '2026-05-06'", () => {
@@ -226,9 +228,69 @@ describe("v0.3.0-A: messages.csv parser", () => {
   });
 });
 
-describe("real export round-trip", () => {
+describe("synthetic export round-trip", () => {
+  test("ISC-1..10: parses the synthetic export to its hand-computed facts", async () => {
+    const parsed = await parseLinkedInExport(await buildSyntheticExport());
+
+    // ISC-10: Profile.csv has exactly 1 row (owner)
+    expect(parsed.profile.fullName).toBe(FIXTURE.owner.fullName);
+    expect(parsed.profile.headline).toBe(FIXTURE.owner.headline);
+
+    // ISC-1, ISC-2: Notes preamble skipped, BOM stripped, CRLF handled;
+    // trailing phantom row dropped; URL-less row kept at parse.
+    expect(parsed.connections.length).toBe(FIXTURE.connectionsParsed);
+    expect(parsed.connections.filter((c) => c.linkedinUrl).length).toBe(
+      FIXTURE.connectionsWithUrl,
+    );
+
+    // ISC-7: non-ASCII names round-trip
+    expect(parsed.connections.some((c) => c.fullName === "José Núñez")).toBe(true);
+
+    // Quoted comma + escaped double quote inside a field
+    const theo = parsed.connections.find((c) => c.fullName === "Theo Marsh");
+    expect(theo?.position).toBe('Partner, "Data & AI"');
+    expect(theo?.company).toBe("Cedar & Pine Consulting");
+
+    // ISC-3: every connection with a URL carries a parsed date
+    for (const c of parsed.connections) {
+      expect(c.connectedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+
+    // ISC-4/5/8: undated position dropped; current flag; quoted location
+    expect(parsed.positions.length).toBe(FIXTURE.positionsParsed);
+    const current = parsed.positions.filter((p) => p.current);
+    expect(current.map((p) => p.companyName)).toEqual([FIXTURE.bigCompany]);
+    expect(current[0]!.startDate).toBe("2019-03-01");
+    expect(current[0]!.location).toBe("Madrid, Community of Madrid, Spain");
+
+    // messages.csv: owner URL inferred from FROM, stats exact
+    expect(parsed.ownerProfileUrl).toBe(FIXTURE.owner.url);
+    expect(parsed.messagesParseStats).toEqual({
+      parsed: FIXTURE.messageRows,
+      expanded: FIXTURE.messagesExpanded,
+      skipped_no_url: FIXTURE.messagesSkippedNoUrl,
+      skipped_no_date: FIXTURE.messagesSkippedNoDate,
+    });
+    // Same-second burst to Zoe survives as two records (contentHash differs)
+    const zoe = parsed.connections.find((c) => c.fullName === "Zoe Varga")!;
+    const toZoe = parsed.messages.filter((m) => m.recipientProfileUrl === zoe.linkedinUrl);
+    const epochs = toZoe.map((m) => m.sentAtEpoch);
+    expect(new Set(epochs).size).toBe(epochs.length - 1);
+  });
+
+  test("Basic export (no messages.csv) parses with zeroed message stats", async () => {
+    const parsed = await parseLinkedInExport(
+      await buildSyntheticExport({ includeMessages: false }),
+    );
+    expect(parsed.messages).toEqual([]);
+    expect(parsed.ownerProfileUrl).toBeNull();
+    expect(parsed.messagesParseStats.parsed).toBe(0);
+  });
+});
+
+describe.skipIf(!REAL_EXPORT_PATH)("real export round-trip (STRAND_REAL_EXPORT)", () => {
   test("ISC-1..10: parses Matt's real LinkedIn export", async () => {
-    const bytes = await readFile(REAL_EXPORT_PATH);
+    const bytes = await readFile(REAL_EXPORT_PATH!);
     const parsed = await parseLinkedInExport(bytes);
 
     // ISC-10: Profile.csv has exactly 1 row (owner)

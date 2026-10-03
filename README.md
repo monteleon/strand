@@ -247,7 +247,7 @@ not a rewrite.
 
 ```bash
 bun run typecheck       # tsc --noEmit
-bun test                # unit tests (parser + derive math)
+bun test                # full suite against a synthetic export (no real data needed)
 bun run db:migrate      # apply Drizzle migrations
 bun run db:studio       # Drizzle Studio against data/strand.db
 bun run screenshots     # regenerate docs/screenshots/* against a running dev server

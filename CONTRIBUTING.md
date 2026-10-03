@@ -29,10 +29,21 @@ bun dev
 
 ## Running the test suite
 
-Unit tests (parser + derive math):
+Unit + query tests:
 
 ```bash
 bun test
+```
+
+No LinkedIn data needed. A preload (`test/preload.ts`, wired in `bunfig.toml`)
+seeds a throwaway SQLite DB from a synthetic export
+(`test/fixtures/synthetic-export.ts`) — invented people, companies and messages
+with hand-computed expected facts in `FIXTURE`. Your `data/strand.db` is never
+touched. Optional real-data runs:
+
+```bash
+STRAND_REAL_EXPORT=/path/to/export.zip bun test   # also parse your real export
+STRAND_DB_PATH=data/strand.db bun test             # query suites against your DB
 ```
 
 Type-check:

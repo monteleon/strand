@@ -152,7 +152,11 @@ describe("v0.4.0: assembleNetworkGraph cap + company filter", () => {
 
 describe("v0.4.0: searchCompanies", () => {
   test("ISC-391: searchCompanies(q) returns ≤limit, ordered by people-count DESC", async () => {
-    const results = await searchCompanies("pwc", 5);
+    // Query with a prefix of the dataset's biggest employer so the test
+    // works on the synthetic fixture and on a real DB alike.
+    const company = await pickCompanyWithPeople(1);
+    expect(company).not.toBeNull();
+    const results = await searchCompanies(company!.name.slice(0, 4), 5);
     expect(results.length).toBeLessThanOrEqual(5);
     expect(results.length).toBeGreaterThan(0);
     // Monotone non-increasing on peopleCount
