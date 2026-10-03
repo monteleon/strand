@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // Subprocess pattern (same as ingest.test.ts / repair-owner-orphans.test.ts) —
 // each test seeds a synthetic positions row set against a temp DB with
@@ -13,7 +13,7 @@ import { join } from "node:path";
 // /graph (which DOES include po.id ASC). Post-fix the inspector picks
 // the lex-smallest position id deterministically.
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const RESULT_MARKER = "__INSPECTOR_TEST_RESULT__";
 
 async function freshDbWithMigrations(): Promise<{ dbPath: string; cleanup: () => void }> {

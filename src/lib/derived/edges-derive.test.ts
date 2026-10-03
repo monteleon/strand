@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // Subprocess pattern (same as ingest.test.ts / personInspector.test.ts):
 // deriveSharedEmployerEdges writes to the DB indicated by STRAND_DB_PATH,
 // and the rest of the test suite runs against the real `data/strand.db`.
 // Per-test temp DB, migrate, seed, derive, probe, exit.
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const RESULT_MARKER = "__DERIVE_TEST_RESULT__";
 
 async function freshDbWithMigrations(): Promise<{ dbPath: string; cleanup: () => void }> {

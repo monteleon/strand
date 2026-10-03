@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // Cascade regression for the v0.4.7 PK change (companyId added to
 // derived_edges PK). Three consumer surfaces broke and are fixed here:
@@ -15,7 +15,7 @@ import { join } from "node:path";
 //      Derived Connections list; switched to ROW_NUMBER()=1 per (other, kind),
 //      picking the strongest row (confidence DESC, overlap_months DESC).
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const RESULT_MARKER = "__CASCADE_TEST_RESULT__";
 
 async function freshDbWithMigrations(): Promise<{ dbPath: string; cleanup: () => void }> {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 // Structural regression for /code-review (re-run) finding #7 (review-#7).
 // v0.4.12 (audit-#10) extracted fetchResults<T>() to retire the brittle
@@ -20,7 +21,7 @@ const ADOPTERS = [
   "src/components/company-picker.tsx",
 ];
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../..");
 
 describe("fetchResults adoption — typeahead components must use the helper", () => {
   for (const path of ADOPTERS) {

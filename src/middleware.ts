@@ -60,8 +60,10 @@ export function middleware(request: NextRequest): NextResponse {
   return NextResponse.next();
 }
 
-// Guard the API surface only. Page navigation is same-origin by construction
-// and the data-bearing/state-changing risk lives entirely behind /api.
+// Guard every route, not just /api. Pages are server components that render
+// the network graph straight into the HTML/RSC payload, so a rebound
+// `evil.com` reading `/people` or `/graph` is as much a leak as reading /api.
+// Only static build assets (no user data) are exempt.
 export const config = {
-  matcher: "/api/:path*",
+  matcher: "/((?!_next/static|_next/image|favicon.ico).*)",
 };

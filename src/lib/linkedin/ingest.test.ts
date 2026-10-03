@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // Subprocess pattern: ingest writes to the DB, and the rest of the test suite
 // runs against the real `data/strand.db`. Running ingest in-process would
@@ -10,7 +10,7 @@ import { join } from "node:path";
 // ingest scenario, prints a result line prefixed with __INGEST_TEST_RESULT__,
 // and exits. The test process only parses and asserts on that line.
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const REAL_EXPORT_PATH =
   "/mnt/c/Users/mca/Downloads/Basic_LinkedInDataExport_05-12-2026.zip.zip";
 const RESULT_MARKER = "__INGEST_TEST_RESULT__";

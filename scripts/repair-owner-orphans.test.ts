@@ -1,13 +1,13 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // Same subprocess pattern as src/lib/linkedin/ingest.test.ts — the script
 // writes to its DB at module load, so each test spawns a fresh subprocess
 // with STRAND_DB_PATH pointing at a per-test temp file.
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "..");
 const RESULT_MARKER = "__REPAIR_TEST_RESULT__";
 
 async function freshDbWithMigrations(): Promise<{ dbPath: string; cleanup: () => void }> {

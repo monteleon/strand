@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
 import { ingestLinkedInExport } from "@/lib/linkedin/ingest";
+import { MAX_INGEST_BYTES } from "@/lib/linkedin/limits";
 
 export const runtime = "nodejs";
 // LinkedIn export is small (≤ a few MB). Don't cache, don't pre-render.
 export const dynamic = "force-dynamic";
 
-// Upper bound on an ingestable upload. Real LinkedIn exports are a few MB at
-// most (Matt's is ~600 KB; the largest connection lists hit single-digit MB).
-// 50 MB leaves comfortable headroom while preventing a multi-GB body from
-// being materialised into the Node heap by `file.arrayBuffer()`.
-export const MAX_INGEST_BYTES = 50 * 1024 * 1024;
 // Multipart envelope overhead — Content-Disposition + Content-Type headers
 // per part, the boundary delimiters between parts and the terminator, plus
 // any sibling fields. 64 KiB covers realistic envelopes by a wide margin

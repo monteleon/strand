@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 // Subprocess-isolated query-layer regression for /code-review finding #7 —
 // listCompanies / listPeople / searchPeople built LIKE patterns with raw
@@ -10,7 +10,7 @@ import { join } from "node:path";
 // This test seeds a temp DB with rows that contain literal % and _ in their
 // names so the assertions are observable.
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const RESULT_MARKER = "__LIKE_TEST_RESULT__";
 
 async function freshDbWithMigrations(): Promise<{ dbPath: string; cleanup: () => void }> {

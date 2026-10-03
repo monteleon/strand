@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 // Regression for /code-review (re-run) finding #10. Migration 0005
 // promoted derived_edges.company_id to a real NOT NULL column and added
@@ -16,7 +17,7 @@ import { readFileSync } from "node:fs";
 // json_extract(..., '$.companyId') drops the index from the query plan
 // silently.
 
-const REPO_ROOT = "/mnt/c/Users/mca/Projects/Strand";
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const READERS = [
   "src/lib/queries/derivedEdges.ts",
   "src/lib/queries/reach.ts",

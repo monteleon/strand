@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { isDeriveInFlight, runDeriveSerialized } from "./edges";
+
+const REPO_ROOT = resolve(import.meta.dir, "../../..");
 
 // Unit tests for the module-level derive lock (review-#2). The lock lives
 // in @/lib/derived/edges so every caller — POST /api/derive AND the
@@ -97,13 +100,13 @@ describe("runDeriveSerialized + isDeriveInFlight (review-#2)", () => {
 // clear-then-rebuild passes can interleave and corrupt derived_edges.
 describe("derive lock altitude — every caller goes through the gate", () => {
   test("api/derive/route.ts imports isDeriveInFlight and runDeriveSerialized", () => {
-    const src = readFileSync("/mnt/c/Users/mca/Projects/Strand/src/app/api/derive/route.ts", "utf8");
+    const src = readFileSync(`${REPO_ROOT}/src/app/api/derive/route.ts`, "utf8");
     expect(src).toContain("isDeriveInFlight");
     expect(src).toContain("runDeriveSerialized");
   });
 
   test("lib/linkedin/ingest.ts wraps deriveSharedEmployerEdges with runDeriveSerialized", () => {
-    const src = readFileSync("/mnt/c/Users/mca/Projects/Strand/src/lib/linkedin/ingest.ts", "utf8");
+    const src = readFileSync(`${REPO_ROOT}/src/lib/linkedin/ingest.ts`, "utf8");
     expect(src).toContain("runDeriveSerialized");
     // The pre-v0.4.14 bare call shape must NOT survive — bypassing the lock
     // is the bug; this guard catches a regression where someone reverts the

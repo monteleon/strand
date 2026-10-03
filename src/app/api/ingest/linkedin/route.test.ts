@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_INGEST_BYTES, POST } from "./route";
+import { MAX_INGEST_BYTES } from "@/lib/linkedin/limits";
+import { POST } from "./route";
 
 // Route-level regression for /code-review finding #12 (size guard) and
 // v0.4.18 (review-#6). The audit showed `await request.formData()`
