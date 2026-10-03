@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
+import { LOCAL_TENANT_ID, db, schema, type DbExecutor } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { parseLinkedInExport, type ParsedExport } from "./parse";
 import { deriveSharedEmployerEdges, runDeriveSerialized } from "@/lib/derived/edges";
@@ -69,63 +69,89 @@ export async function ingestLinkedInExport(
   const sha256 = sha256Hex(zipBytes);
 
   // ISC-16: same .zip → no-op. Existing batch returned, no further writes.
-  const existingBatch = await db
-    .select()
-    .from(schema.exportBatches)
-    .where(eq(schema.exportBatches.sha256, sha256))
-    .limit(1);
-  if (existingBatch.length > 0) {
-    const batch = existingBatch[0];
+  // Fast path before parsing; re-checked under the lock below.
+  const existing = await findBatchBySha(sha256, db);
+  if (existing) {
     const counts = await readTenantCounts(tenantId);
-    return { batchId: batch.id, duplicate: true, counts };
+    return { batchId: existing.id, duplicate: true, counts };
   }
 
   const parsed = await parseLinkedInExport(zipBytes);
   const batchId = crypto.randomUUID();
   const now = new Date();
 
-  // ISC-14: tenant exists. ingest must not crash if migrate hasn't run yet,
-  // but in normal operation `bun run db:migrate` has already created 'local'.
-  await db
-    .insert(schema.tenants)
-    .values({ id: tenantId, createdAt: now })
-    .onConflictDoNothing();
+  // All-or-nothing (v0.4.26). Every write below — and the derive pass that
+  // reads them — runs in ONE transaction. Before this, each step committed on
+  // its own: a failure after the export_batches row landed left the tenant
+  // half-ingested, and re-uploading the same zip hit the duplicate shortcut
+  // above, so the partial state could never be repaired by retrying. Now a
+  // failure rolls back the batch row with everything else and a retry starts
+  // clean. Readers keep seeing the previous committed state until COMMIT.
+  //
+  // The whole transaction runs under runDeriveSerialized: derive's clear-
+  // then-rebuild happens inside it, and holding the lock for the full
+  // transaction also stops POST /api/derive (409) from trying to write while
+  // this transaction holds SQLite's write lock.
+  return runDeriveSerialized(() =>
+    db.transaction(async (tx) => {
+      // A concurrent upload of the same zip may have committed while we parsed.
+      const raced = await findBatchBySha(sha256, tx);
+      if (raced) {
+        const counts = await readTenantCounts(tenantId, tx);
+        return { batchId: raced.id, duplicate: true, counts };
+      }
 
-  // ISC-15: batch row written. ISC-37: bytes never leave memory.
-  await db.insert(schema.exportBatches).values({
-    id: batchId,
-    tenantId,
-    source: "linkedin",
-    uploadedAt: now,
-    filename,
-    sha256,
-  });
+      // ISC-14: tenant exists. ingest must not crash if migrate hasn't run yet,
+      // but in normal operation `bun run db:migrate` has already created 'local'.
+      await tx
+        .insert(schema.tenants)
+        .values({ id: tenantId, createdAt: now })
+        .onConflictDoNothing();
 
-  await writeOwner(parsed, tenantId, batchId, now);
-  // v0.3.0-A: Profile.csv has no URL column; the owner's profile URL is
-  // recovered from messages.csv (FROM == owner.fullName → SENDER URL) and
-  // backfilled here so subsequent message resolution can use a single URL→id
-  // path. Safe no-op when messages.csv is missing or owner sent no messages.
-  await backfillOwnerLinkedinUrl(parsed, tenantId);
-  await writeCompanies(parsed, tenantId);
-  await writePeople(parsed, tenantId, batchId, now);
-  await writeConnections(parsed, tenantId, now);
-  await writePositions(parsed, tenantId);
-  await writeSynthesisedConnectionPositions(parsed, tenantId);
+      // ISC-15: batch row written. ISC-37: bytes never leave memory.
+      await tx.insert(schema.exportBatches).values({
+        id: batchId,
+        tenantId,
+        source: "linkedin",
+        uploadedAt: now,
+        filename,
+        sha256,
+      });
 
-  // Derive shared-employer edges from the fresh positions. Idempotent
-  // (clear-then-rebuild) so cheap on every ingest. ISC-90. Goes through
-  // runDeriveSerialized so a concurrent POST /api/derive (stale tab, repair
-  // script, etc.) is serialised — two clear-then-rebuild passes interleaving
-  // would corrupt the derived_edges table.
-  await runDeriveSerialized(() => deriveSharedEmployerEdges(tenantId, now));
+      await writeOwner(parsed, tenantId, batchId, now, tx);
+      // v0.3.0-A: Profile.csv has no URL column; the owner's profile URL is
+      // recovered from messages.csv (FROM == owner.fullName → SENDER URL) and
+      // backfilled here so subsequent message resolution can use a single URL→id
+      // path. Safe no-op when messages.csv is missing or owner sent no messages.
+      await backfillOwnerLinkedinUrl(parsed, tenantId, tx);
+      await writeCompanies(parsed, tenantId, tx);
+      await writePeople(parsed, tenantId, batchId, now, tx);
+      await writeConnections(parsed, tenantId, now, tx);
+      await writePositions(parsed, tenantId, tx);
+      await writeSynthesisedConnectionPositions(parsed, tenantId, tx);
 
-  // v0.3.0-A: ingest messages last — depends on owner backfill + writePeople
-  // having populated all 1st-degree person rows.
-  const messageStats = await writeMessages(parsed, tenantId);
+      // Derive shared-employer edges from the fresh positions. Idempotent
+      // (clear-then-rebuild) so cheap on every ingest. ISC-90. Runs on `tx`, so
+      // it sees the uncommitted positions above and commits with them.
+      await deriveSharedEmployerEdges(tenantId, now, tx);
 
-  const counts = await readTenantCounts(tenantId);
-  return { batchId, duplicate: false, counts, messageStats };
+      // v0.3.0-A: ingest messages last — depends on owner backfill + writePeople
+      // having populated all 1st-degree person rows.
+      const messageStats = await writeMessages(parsed, tenantId, tx);
+
+      const counts = await readTenantCounts(tenantId, tx);
+      return { batchId, duplicate: false, counts, messageStats };
+    }),
+  );
+}
+
+async function findBatchBySha(sha256: string, exec: DbExecutor) {
+  const rows = await exec
+    .select()
+    .from(schema.exportBatches)
+    .where(eq(schema.exportBatches.sha256, sha256))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 // v0.4.2: re-ingest with a changed owner display name (marriage, accent fix,
@@ -145,8 +171,9 @@ export async function writeOwner(
   tenantId: string,
   batchId: string,
   now: Date,
+  exec: DbExecutor = db,
 ) {
-  const tenantRow = await db
+  const tenantRow = await exec
     .select()
     .from(schema.tenants)
     .where(eq(schema.tenants.id, tenantId))
@@ -155,7 +182,7 @@ export async function writeOwner(
 
   let existingOwnerRow: typeof schema.people.$inferSelect | undefined;
   if (existingOwnerId) {
-    const rows = await db
+    const rows = await exec
       .select()
       .from(schema.people)
       .where(eq(schema.people.id, existingOwnerId))
@@ -166,7 +193,7 @@ export async function writeOwner(
   let id: string;
   if (existingOwnerRow) {
     id = existingOwnerRow.id;
-    await db
+    await exec
       .update(schema.people)
       .set({
         fullName: parsed.profile.fullName,
@@ -176,7 +203,7 @@ export async function writeOwner(
       .where(eq(schema.people.id, id));
   } else {
     id = ownerPersonId(tenantId, parsed.profile.fullName);
-    await db
+    await exec
       .insert(schema.people)
       .values({
         id,
@@ -193,7 +220,7 @@ export async function writeOwner(
   }
 
   // ISC-17: tenants.owner_person_id set (idempotent when id is unchanged)
-  await db
+  await exec
     .update(schema.tenants)
     .set({ ownerPersonId: id })
     .where(eq(schema.tenants.id, tenantId));
@@ -206,7 +233,11 @@ function isPlaceholderCompany(normalized: string): boolean {
   return !/[a-z0-9]/.test(normalized) || normalized === "n/a";
 }
 
-export async function writeCompanies(parsed: ParsedExport, tenantId: string) {
+export async function writeCompanies(
+  parsed: ParsedExport,
+  tenantId: string,
+  exec: DbExecutor = db,
+) {
   // Union of companies from positions + connections.company text.
   const names = new Set<string>();
   for (const p of parsed.positions) {
@@ -224,7 +255,7 @@ export async function writeCompanies(parsed: ParsedExport, tenantId: string) {
     // onConflictDoNothing silently dropped the corrected name; users
     // saw the first-imported version forever. normalizedName is fixed
     // by definition (it's how we derive id), so don't touch it.
-    await db
+    await exec
       .insert(schema.companies)
       .values({
         id: companyIdFromName(tenantId, normalized),
@@ -244,6 +275,7 @@ export async function writePeople(
   tenantId: string,
   batchId: string,
   now: Date,
+  exec: DbExecutor = db,
 ) {
   for (const c of parsed.connections) {
     if (!c.linkedinUrl) continue; // no URL → cannot dedup; skip rather than corrupt
@@ -256,7 +288,7 @@ export async function writePeople(
     // stable; we update fullName, headline, email, and lastSeen.
     // firstSeen and sourceBatchId stay frozen at the row's introduction
     // — they record provenance, not current state.
-    await db
+    await exec
       .insert(schema.people)
       .values({
         id,
@@ -281,8 +313,13 @@ export async function writePeople(
   }
 }
 
-export async function writeConnections(parsed: ParsedExport, tenantId: string, now: Date) {
-  const tenantRow = await db
+export async function writeConnections(
+  parsed: ParsedExport,
+  tenantId: string,
+  now: Date,
+  exec: DbExecutor = db,
+) {
+  const tenantRow = await exec
     .select()
     .from(schema.tenants)
     .where(eq(schema.tenants.id, tenantId))
@@ -301,7 +338,7 @@ export async function writeConnections(parsed: ParsedExport, tenantId: string, n
     // a different `Connected On` value for the same connection (their
     // backfills, locale changes, edge cases) — pre-fix the second
     // ingest's correction was silently dropped via onConflictDoNothing.
-    await db
+    await exec
       .insert(schema.connections)
       .values({
         tenantId,
@@ -332,8 +369,12 @@ export async function writeConnections(parsed: ParsedExport, tenantId: string, n
 // still produce a new row with a new id; that's the right behaviour because
 // those changes amount to "a different position." Re-ingesting the most
 // recent export is now a one-shot repair for any user previously affected.
-export async function writePositions(parsed: ParsedExport, tenantId: string) {
-  const tenantRow = await db
+export async function writePositions(
+  parsed: ParsedExport,
+  tenantId: string,
+  exec: DbExecutor = db,
+) {
+  const tenantRow = await exec
     .select()
     .from(schema.tenants)
     .where(eq(schema.tenants.id, tenantId))
@@ -345,7 +386,7 @@ export async function writePositions(parsed: ParsedExport, tenantId: string) {
     if (!normalized || isPlaceholderCompany(normalized)) continue;
     const companyId = companyIdFromName(tenantId, normalized);
     const positionId = positionIdFromParts(ownerId, companyId, p.startDate, p.title);
-    await db
+    await exec
       .insert(schema.positions)
       .values({
         id: positionId,
@@ -378,6 +419,7 @@ export async function writePositions(parsed: ParsedExport, tenantId: string) {
 export async function writeSynthesisedConnectionPositions(
   parsed: ParsedExport,
   tenantId: string,
+  exec: DbExecutor = db,
 ) {
   for (const c of parsed.connections) {
     if (!c.linkedinUrl) continue;
@@ -388,7 +430,7 @@ export async function writeSynthesisedConnectionPositions(
     const companyId = companyIdFromName(tenantId, normalized);
     const title = c.position && c.position.trim() ? c.position.trim() : null;
     const positionId = positionIdFromParts(personId, companyId, null, title);
-    await db
+    await exec
       .insert(schema.positions)
       .values({
         id: positionId,
@@ -405,13 +447,13 @@ export async function writeSynthesisedConnectionPositions(
   }
 }
 
-async function readTenantCounts(tenantId: string) {
+async function readTenantCounts(tenantId: string, exec: DbExecutor = db) {
   const [people, companies, positions, connections, messages] = await Promise.all([
-    db.$count(schema.people, eq(schema.people.tenantId, tenantId)),
-    db.$count(schema.companies, eq(schema.companies.tenantId, tenantId)),
-    db.$count(schema.positions, eq(schema.positions.tenantId, tenantId)),
-    db.$count(schema.connections, eq(schema.connections.tenantId, tenantId)),
-    db.$count(schema.messages, eq(schema.messages.tenantId, tenantId)),
+    exec.$count(schema.people, eq(schema.people.tenantId, tenantId)),
+    exec.$count(schema.companies, eq(schema.companies.tenantId, tenantId)),
+    exec.$count(schema.positions, eq(schema.positions.tenantId, tenantId)),
+    exec.$count(schema.connections, eq(schema.connections.tenantId, tenantId)),
+    exec.$count(schema.messages, eq(schema.messages.tenantId, tenantId)),
   ]);
   return { people, companies, positions, connections, messages };
 }
@@ -421,16 +463,20 @@ async function readTenantCounts(tenantId: string) {
 // v0.4.2: read the owner id from tenants (single source of truth) rather than
 // recomputing from fullName — after a rename re-ingest the name-derived sha1
 // no longer matches the persisted owner row.
-async function backfillOwnerLinkedinUrl(parsed: ParsedExport, tenantId: string) {
+async function backfillOwnerLinkedinUrl(
+  parsed: ParsedExport,
+  tenantId: string,
+  exec: DbExecutor = db,
+) {
   if (!parsed.ownerProfileUrl) return;
-  const tenantRow = await db
+  const tenantRow = await exec
     .select()
     .from(schema.tenants)
     .where(eq(schema.tenants.id, tenantId))
     .limit(1);
   const id = tenantRow[0]?.ownerPersonId;
   if (!id) return;
-  await db
+  await exec
     .update(schema.people)
     .set({ linkedinUrl: parsed.ownerProfileUrl })
     .where(eq(schema.people.id, id));
@@ -458,6 +504,7 @@ async function backfillOwnerLinkedinUrl(parsed: ParsedExport, tenantId: string) 
 async function writeMessages(
   parsed: ParsedExport,
   tenantId: string,
+  exec: DbExecutor = db,
 ): Promise<IngestMessageStats> {
   const base = {
     ...parsed.messagesParseStats,
@@ -468,7 +515,7 @@ async function writeMessages(
 
   // v0.4.2: read owner id from tenants — the name-derived sha1 diverges from
   // the persisted owner row after a rename re-ingest (see writeOwner comment).
-  const tenantRow = await db
+  const tenantRow = await exec
     .select()
     .from(schema.tenants)
     .where(eq(schema.tenants.id, tenantId))
@@ -479,7 +526,7 @@ async function writeMessages(
 
   // Pre-fetch the tenant's valid people IDs once — O(N) lookup instead of
   // O(N×M) SELECT-per-message.
-  const peopleRows = await db
+  const peopleRows = await exec
     .select({ id: schema.people.id })
     .from(schema.people)
     .where(eq(schema.people.tenantId, tenantId));
@@ -530,7 +577,7 @@ async function writeMessages(
 
   // Track real-DB delta so re-ingest of overlapping archives reports
   // truthful "inserted" counts (DO NOTHING conflicts don't count).
-  const beforeCount = await db.$count(
+  const beforeCount = await exec.$count(
     schema.messages,
     eq(schema.messages.tenantId, tenantId),
   );
@@ -542,10 +589,10 @@ async function writeMessages(
   const CHUNK = 200;
   for (let i = 0; i < batch.length; i += CHUNK) {
     const slice = batch.slice(i, i + CHUNK);
-    await db.insert(schema.messages).values(slice).onConflictDoNothing();
+    await exec.insert(schema.messages).values(slice).onConflictDoNothing();
   }
 
-  const afterCount = await db.$count(
+  const afterCount = await exec.$count(
     schema.messages,
     eq(schema.messages.tenantId, tenantId),
   );

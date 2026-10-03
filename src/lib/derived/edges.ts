@@ -20,7 +20,7 @@
 // the owner's former employer still emerge.
 
 import { and, eq, sql } from "drizzle-orm";
-import { LOCAL_TENANT_ID, db, schema } from "@/lib/db";
+import { LOCAL_TENANT_ID, db, schema, type DbExecutor } from "@/lib/db";
 
 // Module-singleton mutex around deriveSharedEmployerEdges. The deriver does
 // clear-then-rebuild against derived_edges; two simultaneous passes can
@@ -152,10 +152,22 @@ export function bucketise(
   return { kind: "shared_employer_no_overlap", confidence: 0.4 };
 }
 
+// Atomic: the clear-then-rebuild below runs inside ONE transaction, so a
+// reader never sees derived_edges empty or half-rebuilt, and a crash mid-pass
+// rolls back to the previous edge set. Called without `exec` (POST
+// /api/derive, CLI) it opens its own transaction; ingest passes its
+// transaction so derive reads the positions ingest just wrote and commits
+// together with them. libsql's transaction() moves the open connection onto
+// the tx handle and gives everyone else a fresh one, so concurrent readers
+// keep seeing the last committed edges until COMMIT.
 export async function deriveSharedEmployerEdges(
   tenantId: string = LOCAL_TENANT_ID,
   now: Date = new Date(),
+  exec?: DbExecutor,
 ): Promise<DeriveResult> {
+  if (!exec) {
+    return db.transaction((tx) => deriveSharedEmployerEdges(tenantId, now, tx));
+  }
   const t0 = Date.now();
 
   // Today as YYYY-MM-01 — month precision matches the export.
@@ -164,7 +176,7 @@ export async function deriveSharedEmployerEdges(
   );
 
   // Pull every position row (with the joined company name) for the tenant.
-  const rows = await db
+  const rows = await exec
     .select({
       personId: schema.positions.personId,
       companyId: schema.positions.companyId,
@@ -264,7 +276,7 @@ export async function deriveSharedEmployerEdges(
   // Clear-then-rebuild: derive is idempotent over the current data, and if
   // positions changed (a re-ingest, a manual edit) stale edges should not
   // linger. The whole pass is fast enough that this is cheap.
-  await db
+  await exec
     .delete(schema.derivedEdges)
     .where(eq(schema.derivedEdges.tenantId, tenantId));
 
@@ -282,7 +294,7 @@ export async function deriveSharedEmployerEdges(
   const buffer: (typeof schema.derivedEdges.$inferInsert)[] = [];
   const flush = async () => {
     if (buffer.length === 0) return;
-    await db
+    await exec
       .insert(schema.derivedEdges)
       .values(buffer)
       .onConflictDoNothing();

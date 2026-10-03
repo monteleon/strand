@@ -12,6 +12,8 @@ const dbPath = isAbsolute(raw) ? raw : join(process.cwd(), raw);
 mkdirSync(dirname(dbPath), { recursive: true });
 
 const client = createClient({ url: `file:${dbPath}` });
+// Persistent per-file; see the WAL note in ./index.ts.
+await client.execute("PRAGMA journal_mode = WAL");
 const db = drizzle(client);
 
 await migrate(db, { migrationsFolder: MIGRATIONS_DIR });

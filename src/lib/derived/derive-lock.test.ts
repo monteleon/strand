@@ -105,12 +105,15 @@ describe("derive lock altitude — every caller goes through the gate", () => {
     expect(src).toContain("runDeriveSerialized");
   });
 
-  test("lib/linkedin/ingest.ts wraps deriveSharedEmployerEdges with runDeriveSerialized", () => {
+  test("lib/linkedin/ingest.ts runs derive inside its runDeriveSerialized-locked transaction", () => {
     const src = readFileSync(`${REPO_ROOT}/src/lib/linkedin/ingest.ts`, "utf8");
-    expect(src).toContain("runDeriveSerialized");
-    // The pre-v0.4.14 bare call shape must NOT survive — bypassing the lock
-    // is the bug; this guard catches a regression where someone reverts the
-    // wrapper "for simplicity".
-    expect(src).not.toMatch(/await\s+deriveSharedEmployerEdges\s*\(/);
+    // v0.4.26: the whole ingest transaction holds the lock, and derive runs
+    // on that transaction (third arg `tx`) — never on the bare `db`, which
+    // would both bypass the transaction and, if unlocked, interleave with
+    // POST /api/derive. Bare `deriveSharedEmployerEdges(tenantId, now)` (no
+    // executor) is the regression this guards.
+    expect(src).toMatch(/runDeriveSerialized\(\(\)\s*=>\s*db\.transaction\(/);
+    expect(src).toMatch(/deriveSharedEmployerEdges\(\s*tenantId,\s*now,\s*tx\s*\)/);
+    expect(src).not.toMatch(/deriveSharedEmployerEdges\(\s*tenantId,\s*now\s*\)/);
   });
 });
